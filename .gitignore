@@ -1,0 +1,52 @@
+# ── API keys & secrets ─────────────────────────────────────
+config.json
+
+# ── Python ─────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# ── Virtual environments ────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Environment files ───────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── OS / editor junk ───────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# ── Logs & databases ───────────────────────────────────────
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# ── Uploads / temp outputs ─────────────────────────────────
+static/uploads/
+*.csv
+*.pdf
+
+# ── Project-specific: old versions & test data ─────────────
+ip_investigator*.py
+IoC.txt

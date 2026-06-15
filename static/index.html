@@ -1,0 +1,3068 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>IP Reputation Investigator</title>
+<style>
+:root {
+  --bg:#0d1117; --bg2:#161b22; --bg3:#21262d; --border:#30363d;
+  --text:#e6edf3; --text2:#8b949e;
+  --cyan:#58a6ff; --green:#3fb950; --yellow:#d29922;
+  --orange:#f0883e; --red:#f85149; --purple:#bc8cff;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;}
+a{color:var(--cyan);}
+
+/* Layout */
+.app{display:flex;flex-direction:column;min-height:100vh;}
+header{background:var(--bg2);border-bottom:1px solid var(--border);padding:0 24px;display:flex;align-items:center;gap:16px;height:56px;}
+header h1{font-size:16px;font-weight:600;color:var(--cyan);letter-spacing:.5px;}
+.badge{font-size:11px;background:var(--bg3);border:1px solid var(--border);color:var(--text2);padding:2px 8px;border-radius:12px;}
+nav{margin-left:auto;display:flex;gap:4px;}
+nav button{background:none;border:none;color:var(--text2);cursor:pointer;padding:6px 14px;border-radius:6px;font-size:13px;transition:background .15s,color .15s;}
+nav button:hover{background:var(--bg3);color:var(--text);}
+nav button.active{background:var(--bg3);color:var(--cyan);}
+main{flex:1;padding:24px;max-width:1200px;margin:0 auto;width:100%;}
+
+/* Pages */
+.page{display:none;} .page.active{display:block;}
+
+/* Cards */
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:20px;}
+.card h2{font-size:14px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.8px;margin-bottom:16px;}
+
+/* Input */
+.input-row{display:flex;gap:12px;margin-bottom:16px;}
+.input-row input,.input-row textarea{flex:1;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:10px 14px;font-size:14px;font-family:'Consolas',monospace;resize:none;outline:none;transition:border-color .15s;}
+.input-row input:focus,.input-row textarea:focus{border-color:var(--cyan);}
+textarea{min-height:120px;}
+
+/* Tabs */
+.tabs{display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--border);}
+.tab-btn{background:none;border:none;color:var(--text2);cursor:pointer;padding:8px 16px;font-size:13px;border-bottom:2px solid transparent;transition:all .15s;margin-bottom:-1px;}
+.tab-btn.active{color:var(--cyan);border-bottom-color:var(--cyan);}
+.tab-content{display:none;} .tab-content.active{display:block;}
+
+/* Buttons */
+.btn{padding:9px 20px;border-radius:8px;border:none;cursor:pointer;font-size:14px;font-weight:500;transition:opacity .15s,transform .1s;}
+.btn:active{transform:scale(.98);}
+.btn-primary{background:var(--cyan);color:#0d1117;}
+.btn-primary:hover{opacity:.85;}
+.btn-primary:disabled{opacity:.4;cursor:not-allowed;transform:none;}
+.btn-secondary{background:var(--bg3);border:1px solid var(--border);color:var(--text);}
+.btn-secondary:hover{background:var(--border);}
+.btn-sm{padding:5px 12px;font-size:12px;}
+
+/* Upload */
+.upload-zone{border:2px dashed var(--border);border-radius:10px;padding:32px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s;color:var(--text2);font-size:14px;}
+.upload-zone:hover,.upload-zone.drag{border-color:var(--cyan);background:rgba(88,166,255,.05);color:var(--cyan);}
+.upload-zone input{display:none;}
+.upload-zone .icon{font-size:32px;margin-bottom:8px;}
+
+/* Stats */
+.stats-bar{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px;}
+.stat-card{flex:1;min-width:110px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:14px 16px;text-align:center;}
+.stat-card .val{font-size:28px;font-weight:700;line-height:1;}
+.stat-card .lbl{font-size:11px;color:var(--text2);margin-top:4px;text-transform:uppercase;letter-spacing:.5px;}
+.stat-card.malicious{border-color:var(--red);} .stat-card.malicious .val{color:var(--red);}
+.stat-card.high_risk{border-color:var(--orange);} .stat-card.high_risk .val{color:var(--orange);}
+.stat-card.suspicious{border-color:var(--yellow);} .stat-card.suspicious .val{color:var(--yellow);}
+.stat-card.clean{border-color:var(--green);} .stat-card.clean .val{color:var(--green);}
+
+/* Filter */
+.filter-group{display:flex;gap:6px;flex-wrap:wrap;}
+.filter-btn{background:var(--bg3);border:1px solid var(--border);color:var(--text2);padding:4px 12px;border-radius:20px;font-size:12px;cursor:pointer;transition:all .15s;}
+.filter-btn.active{border-color:var(--cyan);color:var(--cyan);}
+.filter-btn:hover{color:var(--text);}
+
+/* Table */
+table{width:100%;border-collapse:collapse;font-size:13px;}
+th{text-align:left;color:var(--text2);font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.5px;padding:8px 12px;border-bottom:1px solid var(--border);}
+td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:middle;}
+tr:last-child td{border-bottom:none;}
+tr:hover td{background:var(--bg3);}
+.ip-cell{font-family:'Consolas',monospace;font-weight:600;color:var(--cyan);}
+
+/* Score bar */
+.score-bar-wrap{display:flex;align-items:center;gap:8px;}
+.score-bar{height:6px;border-radius:3px;background:var(--bg3);flex:1;overflow:hidden;max-width:80px;}
+.score-bar-fill{height:100%;border-radius:3px;transition:width .4s;}
+.score-val{font-weight:600;min-width:32px;font-size:13px;}
+
+/* Verdict badges */
+.verdict{display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;letter-spacing:.4px;}
+.verdict.MALICIOUS {background:rgba(248,81,73,.15); color:var(--red);    border:1px solid rgba(248,81,73,.3);}
+.verdict.HIGH_RISK {background:rgba(240,136,62,.15);color:var(--orange); border:1px solid rgba(240,136,62,.3);}
+.verdict.SUSPICIOUS{background:rgba(210,153,34,.15);color:var(--yellow); border:1px solid rgba(210,153,34,.3);}
+.verdict.CLEAN     {background:rgba(63,185,80,.15); color:var(--green);  border:1px solid rgba(63,185,80,.3);}
+
+/* Badges */
+.mini-badge{font-size:9px;padding:1px 5px;border-radius:4px;margin-left:4px;vertical-align:middle;}
+.badge-manual  {background:rgba(188,140,255,.15);color:var(--purple);border:1px solid rgba(188,140,255,.3);}
+.badge-filtered{background:rgba(88,166,255,.1);  color:var(--cyan);  border:1px solid rgba(88,166,255,.3);}
+
+/* Expand row */
+.expand-btn{background:none;border:none;color:var(--text2);cursor:pointer;font-size:18px;line-height:1;padding:0 4px;transition:color .15s;}
+.expand-btn:hover{color:var(--cyan);}
+.detail-row{display:none;}
+.detail-row.open{display:table-row;}
+.detail-row td{background:var(--bg3)!important;padding:16px 20px;}
+.sources-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;}
+.source-card{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:14px;}
+.source-card h4{font-size:12px;font-weight:600;color:var(--cyan);margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;}
+.source-card .ioc-line{font-size:12px;color:var(--text2);padding:3px 0;border-bottom:1px solid var(--border);}
+.source-card .ioc-line:last-of-type{border:none;}
+.source-card .err{color:var(--red);font-size:12px;font-style:italic;margin-bottom:4px;}
+.src-link{display:inline-block;margin-top:8px;font-size:11px;color:var(--cyan);text-decoration:none;border:1px solid rgba(88,166,255,.3);border-radius:6px;padding:3px 9px;transition:background .15s;}
+.src-link:hover{background:rgba(88,166,255,.1);}
+
+/* Loading */
+.loading{text-align:center;padding:32px;color:var(--text2);}
+.spinner{display:inline-block;width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--cyan);border-radius:50%;animation:spin .8s linear infinite;margin-bottom:12px;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.progress-bar{height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;margin-top:8px;}
+.progress-fill{height:100%;background:var(--cyan);border-radius:3px;transition:width .25s;}
+
+/* Empty */
+.empty{text-align:center;padding:60px 20px;color:var(--text2);}
+.empty .icon{font-size:48px;margin-bottom:16px;}
+
+/* Alert */
+.alert{padding:12px 16px;border-radius:8px;font-size:13px;margin-bottom:16px;}
+.alert.info   {background:rgba(88,166,255,.1); border:1px solid rgba(88,166,255,.3); color:var(--cyan);}
+.alert.success{background:rgba(63,185,80,.1);  border:1px solid rgba(63,185,80,.3);  color:var(--green);}
+.alert.error  {background:rgba(248,81,73,.1);  border:1px solid rgba(248,81,73,.3);  color:var(--red);}
+
+/* Range slider */
+.range-wrap{position:relative;height:24px;width:200px;}
+.range-wrap input[type=range]{position:absolute;width:100%;height:4px;background:none;pointer-events:none;-webkit-appearance:none;appearance:none;top:10px;left:0;}
+.range-wrap input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--cyan);cursor:pointer;pointer-events:all;border:2px solid var(--bg);}
+.range-wrap input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--cyan);cursor:pointer;pointer-events:all;border:2px solid var(--bg);}
+.range-track{position:absolute;top:10px;left:0;width:100%;height:4px;background:var(--bg3);border-radius:2px;pointer-events:none;}
+.range-fill{position:absolute;height:4px;background:var(--cyan);border-radius:2px;}
+
+/* Manual override select */
+.override-select{background:var(--bg3);border:1px solid var(--border);color:var(--text2);border-radius:6px;padding:3px 6px;font-size:11px;cursor:pointer;}
+.override-select:focus{outline:none;border-color:var(--cyan);}
+.override-select.overridden{border-color:var(--purple);color:var(--purple);}
+
+/* Source toggles (active sources panel) */
+.sources-toggle{display:flex;flex-wrap:wrap;gap:8px;}
+.src-toggle{display:flex;align-items:center;cursor:pointer;user-select:none;}
+.src-toggle input{display:none;}
+.src-chip{padding:5px 13px;border-radius:20px;font-size:12px;font-weight:500;background:var(--bg3);border:1px solid var(--border);color:var(--text2);transition:all .15s;cursor:pointer;}
+.src-toggle input:checked + .src-chip{background:rgba(88,166,255,.12);border-color:var(--cyan);color:var(--cyan);}
+.src-toggle:hover .src-chip{border-color:var(--cyan);color:var(--text);}
+
+/* Multi-select source filter chips */
+.src-multi{cursor:pointer;}
+.src-multi.active{border-color:var(--orange);color:var(--orange);}
+
+/* Settings */
+.settings-grid{display:grid;gap:16px;}
+.setting-row{display:grid;grid-template-columns:200px 1fr auto;align-items:center;gap:12px;padding:14px;background:var(--bg3);border-radius:8px;}
+.setting-row label{font-size:13px;font-weight:500;}
+.setting-row .hint{font-size:11px;color:var(--text2);margin-top:2px;}
+.setting-row input{background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 12px;font-size:13px;font-family:'Consolas',monospace;outline:none;width:100%;}
+.setting-row input:focus{border-color:var(--cyan);}
+.key-status{width:10px;height:10px;border-radius:50%;background:var(--border);}
+.key-status.ok{background:var(--green);}
+
+/* Export row */
+.export-row{display:flex;gap:8px;flex-wrap:wrap;}
+
+/* Bulk action bar */
+.bulk-bar{display:none;align-items:center;gap:10px;padding:10px 20px;background:rgba(88,166,255,.08);border-bottom:1px solid rgba(88,166,255,.2);}
+.bulk-bar.visible{display:flex;}
+.bulk-bar select{background:var(--bg3);border:1px solid var(--cyan);color:var(--text);border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;}
+.bulk-bar select:focus{outline:none;}
+
+/* Row checkbox */
+.row-cb{width:15px;height:15px;cursor:pointer;accent-color:var(--cyan);}
+tr.selected td{background:rgba(88,166,255,.06)!important;}
+
+/* Inline filter */
+.inline-filter{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;}
+
+/* Source preset buttons */
+.src-preset{background:var(--bg3);border:1px solid var(--border);color:var(--text2);
+  padding:6px 16px;border-radius:20px;font-size:12px;font-weight:500;
+  cursor:pointer;transition:all .15s;}
+.src-preset:hover{border-color:var(--cyan);color:var(--text);}
+.src-preset.active{background:rgba(88,166,255,.12);border-color:var(--cyan);color:var(--cyan);}
+
+/* Traffic Analysis */
+.verdict-banner{border-radius:10px;padding:20px 24px;margin-bottom:20px;display:flex;align-items:center;gap:16px;}
+.verdict-banner.attack{background:rgba(248,81,73,.1);border:1px solid var(--red);}
+.verdict-banner.suspicious{background:rgba(210,153,34,.1);border:1px solid var(--yellow);}
+.verdict-banner.clean{background:rgba(63,185,80,.1);border:1px solid var(--green);}
+.verdict-banner .verdict-icon{font-size:36px;line-height:1;}
+.verdict-banner .verdict-label{font-size:22px;font-weight:700;line-height:1;}
+.verdict-banner.attack   .verdict-label{color:var(--red);}
+.verdict-banner.suspicious .verdict-label{color:var(--yellow);}
+.verdict-banner.clean    .verdict-label{color:var(--green);}
+.verdict-banner .verdict-sub{font-size:12px;color:var(--text2);margin-top:4px;}
+.verdict-banner .score-pill{margin-left:auto;background:var(--bg3);border:1px solid var(--border);
+  border-radius:20px;padding:6px 16px;font-size:13px;font-weight:600;}
+.indicator{background:var(--bg3);border-left:3px solid var(--border);border-radius:6px;
+  padding:12px 16px;margin-bottom:8px;}
+.indicator.HIGH  {border-left-color:var(--red);}
+.indicator.MEDIUM{border-left-color:var(--yellow);}
+.indicator.LOW   {border-left-color:var(--cyan);}
+.indicator .ind-title{font-size:12px;font-weight:700;letter-spacing:.4px;margin-bottom:4px;}
+.indicator.HIGH   .ind-title{color:var(--red);}
+.indicator.MEDIUM .ind-title{color:var(--yellow);}
+.indicator.LOW    .ind-title{color:var(--cyan);}
+.indicator .ind-detail{font-size:12px;color:var(--text2);line-height:1.6;}
+.meta-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:20px;}
+.meta-card{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px 14px;}
+.meta-card .mv{font-size:18px;font-weight:700;color:var(--cyan);}
+.meta-card .ml{font-size:11px;color:var(--text2);margin-top:2px;text-transform:uppercase;letter-spacing:.5px;}
+.cdn-tag{font-size:10px;background:rgba(88,166,255,.12);border:1px solid rgba(88,166,255,.3);
+  color:var(--cyan);padding:2px 7px;border-radius:10px;margin-left:6px;}
+.port-pill{display:inline-block;background:var(--bg3);border:1px solid var(--border);
+  border-radius:12px;padding:3px 10px;font-size:12px;margin:2px;}
+.port-pill.well-known{border-color:var(--green);color:var(--green);}
+.port-pill.suspicious{border-color:var(--yellow);color:var(--yellow);}
+.traffic-upload-zone{border:2px dashed var(--border);border-radius:10px;padding:48px;
+  text-align:center;cursor:pointer;transition:all .2s;color:var(--text2);}
+.traffic-upload-zone:hover,.traffic-upload-zone.drag{border-color:var(--cyan);
+  background:rgba(88,166,255,.05);color:var(--cyan);}
+.traffic-upload-zone input{display:none;}
+.top-bar{background:var(--bg);height:6px;border-radius:3px;margin-top:6px;overflow:hidden;}
+.top-bar-fill{height:100%;border-radius:3px;background:var(--cyan);transition:width .4s;}
+
+</style>
+</head>
+<body>
+<div class="app">
+<header>
+  <span style="font-size:20px;">🔍</span>
+  <h1>IP Reputation Investigator</h1>
+  <span class="badge">v2.0</span>
+  <nav>
+    <button class="active" onclick="showPage('investigate',this)">Investigate</button>
+    <button onclick="showPage('results-page',this)">IP Results <span id="results-count" style="display:none;background:var(--red);color:white;border-radius:10px;padding:1px 6px;font-size:11px;margin-left:4px;"></span></button>
+    <button onclick="showPage('hash-results-page',this)">Hash Results <span id="hash-count" style="display:none;background:var(--purple);color:white;border-radius:10px;padding:1px 6px;font-size:11px;margin-left:4px;"></span></button>
+    <button onclick="showPage('traffic-page',this)">📡 Traffic Analysis</button>
+    <button onclick="showPage('guide-page',this)">📖 Guide</button>
+    <button onclick="showPage('threshold-page',this)">🧮 Threshold Calc</button>
+    <button onclick="showPage('settings',this)">⚙ Settings</button>
+  </nav>
+</header>
+
+<main>
+
+<!-- ══ Investigate Page ══ -->
+<div id="investigate" class="page active">
+  <div class="card">
+    <h2>Investigation Targets</h2>
+
+    <!-- Unified input -->
+    <div class="input-row">
+      <textarea id="unified-input" style="min-height:140px;"
+        placeholder="Paste IPs and/or hashes here — mix freely, one per line&#10;&#10;IP examples:   185.220.101.1  /  8.8.8.8&#10;Hash examples: d41d8cd98f00b204e9800998ecf8427e  (MD5)&#10;               e3b0c44298fc1c149afbf4c8996fb924...  (SHA256)"></textarea>
+    </div>
+
+    <!-- Parsed preview -->
+    <div id="input-preview" style="display:none;margin-bottom:12px;font-size:12px;display:flex;gap:16px;"></div>
+
+    <!-- File upload -->
+    <div class="upload-zone" id="upload-zone" style="padding:16px;" onclick="document.getElementById('file-input').click()">
+      <input type="file" id="file-input" accept=".txt,.csv" onchange="handleFileUpload(this)"/>
+      <span style="font-size:16px;">📁</span>
+      <span style="margin-left:8px;">Drop or click to upload .txt file — IPs and hashes, mixed OK</span>
+    </div>
+    <div id="upload-preview" style="display:none;margin-top:10px;"></div>
+
+    <!-- Source presets -->
+    <div style="margin-top:20px;">
+      <div style="font-size:11px;color:var(--text2);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px;">
+        Sources
+        <span id="sources-summary" style="font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px;color:var(--cyan);"></span>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <button class="src-preset active" data-preset="all"        onclick="setPreset('all',this)">All Sources</button>
+        <button class="src-preset"        data-preset="ip"         onclick="setPreset('ip',this)">IP Only</button>
+        <button class="src-preset"        data-preset="hash"       onclick="setPreset('hash',this)">Hash Only</button>
+        <button class="src-preset"        data-preset="quick"      onclick="setPreset('quick',this)">Quick Scan</button>
+        <button class="src-preset"        data-preset="custom"     onclick="setPreset('custom',this)">Custom &#9660;</button>
+      </div>
+      <!-- Custom toggles (hidden by default) -->
+      <div id="custom-sources" style="display:none;margin-top:14px;">
+        <div style="font-size:11px;color:var(--text2);margin-bottom:6px;font-weight:600;">IP SOURCES</div>
+        <div class="sources-toggle" style="margin-bottom:12px;">
+          <label class="src-toggle" data-src="abuseipdb">    <input type="checkbox" checked onchange="updateSourcesSummary()"><span class="src-chip">AbuseIPDB</span></label>
+          <label class="src-toggle" data-src="virustotal">   <input type="checkbox" checked onchange="updateSourcesSummary()"><span class="src-chip">VirusTotal</span></label>
+          <label class="src-toggle" data-src="otx">          <input type="checkbox" checked onchange="updateSourcesSummary()"><span class="src-chip">AlienVault OTX</span></label>
+          <label class="src-toggle" data-src="hybrid">       <input type="checkbox" checked onchange="updateSourcesSummary()"><span class="src-chip">Hybrid Analysis</span></label>
+          <label class="src-toggle" data-src="greynoise">    <input type="checkbox" checked onchange="updateSourcesSummary()"><span class="src-chip">GreyNoise</span></label>
+          <label class="src-toggle" data-src="ipapi">        <input type="checkbox" checked onchange="updateSourcesSummary()"><span class="src-chip">ip-api</span></label>
+          <label class="src-toggle" data-src="threatfox">    <input type="checkbox" checked onchange="updateSourcesSummary()"><span class="src-chip">ThreatFox</span></label>
+        </div>
+        <div style="font-size:11px;color:var(--text2);margin-bottom:6px;font-weight:600;">HASH SOURCES</div>
+        <div class="sources-toggle" id="hash-sources-toggle">
+          <label class="src-toggle" data-src="virustotal">   <input type="checkbox" checked><span class="src-chip">VirusTotal</span></label>
+          <label class="src-toggle" data-src="malwarebazaar"><input type="checkbox" checked><span class="src-chip">MalwareBazaar</span></label>
+          <label class="src-toggle" data-src="otx">          <input type="checkbox" checked><span class="src-chip">AlienVault OTX</span></label>
+          <label class="src-toggle" data-src="hybrid">       <input type="checkbox" checked><span class="src-chip">Hybrid Analysis</span></label>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:12px;align-items:center;margin-top:16px;">
+      <button class="btn btn-primary" id="investigate-btn" onclick="runInvestigation()">&#128269; Investigate</button>
+      <button class="btn btn-secondary" onclick="clearAll()">Clear</button>
+      <span id="inv-status" style="font-size:12px;"></span>
+    </div>
+  </div>
+
+  <!-- Loading -->
+  <div id="loading" style="display:none;" class="card loading">
+    <div class="spinner"></div>
+    <div id="loading-msg" style="margin-bottom:8px;font-size:14px;">Initializing...</div>
+    <div style="font-size:12px;color:var(--cyan);font-weight:600;">
+      <span id="progress-count"></span>&nbsp;<span id="progress-pct"></span>
+    </div>
+    <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%;"></div></div>
+    <div id="progress-ip" style="font-size:11px;color:var(--text2);margin-top:6px;min-height:16px;"></div>
+  </div>
+
+  <!-- Inline results -->
+  <div id="inline-results" style="display:none;"></div>
+</div>
+
+<!-- ══ Results Page ══ -->
+<div id="results-page" class="page">
+  <div id="no-results" class="empty">
+    <div class="icon">📋</div>
+    <p>No results yet. Go to Investigate to scan IPs.</p>
+  </div>
+  <div id="results-content" style="display:none;">
+    <div class="stats-bar" id="stats-bar"></div>
+
+    <!-- Filter panel -->
+    <div class="card" style="padding:16px 20px;margin-bottom:12px;">
+      <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start;">
+
+        <!-- Verdict -->
+        <div>
+          <div style="font-size:11px;color:var(--text2);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Verdict</div>
+          <div class="filter-group" id="verdict-filter-group">
+            <button class="filter-btn active" onclick="setVerdictFilter('ALL',this)">All</button>
+            <button class="filter-btn" onclick="setVerdictFilter('MALICIOUS',this)">Malicious</button>
+            <button class="filter-btn" onclick="setVerdictFilter('HIGH RISK',this)">High Risk</button>
+            <button class="filter-btn" onclick="setVerdictFilter('SUSPICIOUS',this)">Suspicious</button>
+            <button class="filter-btn" onclick="setVerdictFilter('CLEAN',this)">Clean</button>
+          </div>
+        </div>
+
+        <!-- Score range -->
+        <div>
+          <div style="font-size:11px;color:var(--text2);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">
+            Score Range: <span id="score-range-label" style="color:var(--cyan);">0 – 100</span>
+          </div>
+          <div class="range-wrap">
+            <div class="range-track"><div class="range-fill" id="range-fill" style="left:0%;width:100%;"></div></div>
+            <input type="range" id="score-min" min="0" max="100" value="0"   oninput="onRangeChange()">
+            <input type="range" id="score-max" min="0" max="100" value="100" oninput="onRangeChange()">
+          </div>
+        </div>
+
+        <!-- Source hit filter (multi-select) -->
+        <div>
+          <div style="font-size:11px;color:var(--text2);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px;">Has hit from source</div>
+          <div style="font-size:11px;color:var(--text2);margin-bottom:8px;">
+            <label style="cursor:pointer;"><input type="radio" name="src-logic" value="OR" checked onchange="renderResults()"> Any selected</label>
+            &nbsp;&nbsp;
+            <label style="cursor:pointer;"><input type="radio" name="src-logic" value="AND" onchange="renderResults()"> All selected</label>
+            &nbsp;&nbsp;
+            <a href="#" onclick="clearSourceFilter();return false;" style="color:var(--text2);font-size:11px;">Clear</a>
+          </div>
+          <div class="filter-group">
+            <button class="filter-btn src-multi" data-src="AbuseIPDB"      onclick="toggleSourceFilter(this)">AbuseIPDB</button>
+            <button class="filter-btn src-multi" data-src="VirusTotal"     onclick="toggleSourceFilter(this)">VirusTotal</button>
+            <button class="filter-btn src-multi" data-src="AlienVault OTX" onclick="toggleSourceFilter(this)">OTX</button>
+            <button class="filter-btn src-multi" data-src="Hybrid Analysis" onclick="toggleSourceFilter(this)">Hybrid</button>
+            <button class="filter-btn src-multi" data-src="GreyNoise"      onclick="toggleSourceFilter(this)">GreyNoise</button>
+            <button class="filter-btn src-multi" data-src="ThreatFox"      onclick="toggleSourceFilter(this)">ThreatFox</button>
+            <button class="filter-btn src-multi" data-src="ip-api"         onclick="toggleSourceFilter(this)">ip-api</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="card" style="padding:0;overflow:hidden;">
+      <div style="padding:16px 20px 0;display:flex;align-items:center;gap:12px;">
+        <h2 style="font-size:16px;font-weight:600;color:var(--text);margin:0;">
+          Results <span id="filtered-count" style="font-size:13px;color:var(--text2);font-weight:400;"></span>
+        </h2>
+      </div>
+      <div class="export-row" style="padding:8px 20px 16px;">
+        <button class="btn btn-primary btn-sm" id="pdf-btn" onclick="exportPDF()">📄 Export PDF</button>
+        <button class="btn btn-secondary btn-sm" onclick="exportJSON()">⬇ JSON</button>
+        <button class="btn btn-secondary btn-sm" onclick="exportCSV()">⬇ CSV</button>
+        <button class="btn btn-secondary btn-sm" onclick="clearResults()">🗑 Clear</button>
+      </div>
+      <!-- Bulk action bar -->
+      <div class="bulk-bar" id="bulk-bar">
+        <span id="bulk-count" style="font-size:12px;color:var(--cyan);font-weight:600;"></span>
+        <span style="font-size:12px;color:var(--text2);">selected — set verdict to:</span>
+        <select id="bulk-verdict-select">
+          <option value="">— choose —</option>
+          <option value="MALICIOUS">MALICIOUS</option>
+          <option value="HIGH RISK">HIGH RISK</option>
+          <option value="SUSPICIOUS">SUSPICIOUS</option>
+          <option value="CLEAN">CLEAN</option>
+          <option value="">Clear override</option>
+        </select>
+        <button class="btn btn-primary btn-sm" onclick="applyBulkVerdict()">Apply</button>
+        <button class="btn btn-secondary btn-sm" onclick="exportPDF()" title="Export selected IPs as PDF">📄 PDF</button>
+        <button class="btn btn-secondary btn-sm" onclick="clearSelection()">Deselect All</button>
+      </div>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th><input type="checkbox" class="row-cb" id="select-all-cb" onclick="toggleSelectAll(this)" title="Select all"></th>
+              <th></th><th>IP Address</th><th>Score</th><th>Verdict</th>
+              <th>Sources</th><th>Timestamp</th><th>Override</th>
+            </tr>
+          </thead>
+          <tbody id="results-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Guide Page ══ -->
+<div id="guide-page" class="page">
+  <div style="max-width:860px;margin:0 auto;">
+
+    <!-- Header -->
+    <div style="margin-bottom:28px;">
+      <h2 style="color:var(--cyan);font-size:20px;font-weight:700;margin-bottom:4px;">📖 Scoring System Guide</h2>
+      <p style="color:var(--text2);font-size:13px;margin:0;">How verdicts and scores are calculated across IP Reputation, Hash Analysis, and Traffic Analysis.</p>
+    </div>
+
+    <!-- ── HOW TO GET THE CSV ── -->
+    <div class="card" style="margin-bottom:18px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+        <span style="font-size:20px;">📥</span>
+        <h3 style="color:var(--green);font-size:15px;font-weight:700;margin:0;">How to Export the CSV from Your Anti-DDoS Dashboard</h3>
+      </div>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:16px;">
+        The Traffic Analysis module accepts NetFlow/event CSV files exported directly from your Anti-DDoS appliance (e.g. Fortinet FortiDDoS). Follow these steps:
+      </p>
+
+      <!-- Step list -->
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;">
+        <div style="display:flex;gap:12px;align-items:flex-start;">
+          <div style="min-width:24px;height:24px;background:var(--cyan);color:#000;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;margin-top:1px;">1</div>
+          <div style="color:var(--text);font-size:13px;">Log in to your Anti-DDoS management dashboard and navigate to <b>Event Traffic</b> or the equivalent traffic graph view.</div>
+        </div>
+        <div style="display:flex;gap:12px;align-items:flex-start;">
+          <div style="min-width:24px;height:24px;background:var(--cyan);color:#000;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;margin-top:1px;">2</div>
+          <div style="color:var(--text);font-size:13px;">Select your desired <b>time range</b> and traffic filters (protocol, interface, etc.).</div>
+        </div>
+        <div style="display:flex;gap:12px;align-items:flex-start;">
+          <div style="min-width:24px;height:24px;background:var(--cyan);color:#000;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;margin-top:1px;">3</div>
+          <div style="color:var(--text);font-size:13px;">Click the <b style="color:var(--red);">download icon</b> (top-right corner of the chart) to export the data as a CSV file.</div>
+        </div>
+        <div style="display:flex;gap:12px;align-items:flex-start;">
+          <div style="min-width:24px;height:24px;background:var(--cyan);color:#000;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;margin-top:1px;">4</div>
+          <div style="color:var(--text);font-size:13px;">Upload the downloaded <code style="background:var(--bg3);padding:1px 5px;border-radius:3px;font-size:12px;">.csv</code> file here in the <b>Traffic Analysis</b> tab.</div>
+        </div>
+      </div>
+
+      <!-- Dashboard mock-up / annotation -->
+      <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#0d1117;">
+        <!-- Mock toolbar -->
+        <div style="background:#161b22;padding:8px 14px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);">
+          <span style="color:var(--text);font-size:13px;font-weight:600;">Event Traffic</span>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="background:var(--bg3);color:var(--text2);font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);">Line ▾</span>
+            <span style="background:var(--bg3);color:var(--text2);font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);">All ▾</span>
+            <span style="background:var(--bg3);color:var(--text2);font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);">bps ▾</span>
+            <!-- Highlighted download button -->
+            <div style="position:relative;">
+              <span style="background:var(--bg3);color:var(--text);font-size:16px;padding:3px 8px;border-radius:4px;border:2px solid #f85149;cursor:default;display:inline-block;">⬇</span>
+              <!-- Callout arrow + label -->
+              <div style="position:absolute;right:calc(100% + 10px);top:50%;transform:translateY(-50%);display:flex;align-items:center;gap:6px;white-space:nowrap;">
+                <div style="background:#f85149;color:#fff;font-size:11px;font-weight:700;padding:4px 10px;border-radius:4px;">Click here to download CSV</div>
+                <div style="width:0;height:0;border-top:6px solid transparent;border-bottom:6px solid transparent;border-left:8px solid #f85149;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- Mock chart area -->
+        <div style="padding:12px 14px;">
+          <!-- Legend -->
+          <div style="display:flex;gap:16px;margin-bottom:10px;">
+            <span style="font-size:11px;color:#f85149;">━ TCP Total</span>
+            <span style="font-size:11px;color:#3fb950;">━ Total Traffic</span>
+          </div>
+          <!-- Fake chart (SVG sparkline) -->
+          <svg viewBox="0 0 760 120" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block;">
+            <!-- Y-axis labels -->
+            <text x="4" y="18"  font-size="9" fill="#8b949e">840 Mbps</text>
+            <text x="4" y="48"  font-size="9" fill="#8b949e">600 Mbps</text>
+            <text x="4" y="78"  font-size="9" fill="#8b949e">400 Mbps</text>
+            <text x="4" y="108" font-size="9" fill="#8b949e">0 bps</text>
+            <!-- Grid lines -->
+            <line x1="60" y1="15"  x2="755" y2="15"  stroke="#30363d" stroke-width="0.5" stroke-dasharray="4,3"/>
+            <line x1="60" y1="45"  x2="755" y2="45"  stroke="#30363d" stroke-width="0.5" stroke-dasharray="4,3"/>
+            <line x1="60" y1="75"  x2="755" y2="75"  stroke="#30363d" stroke-width="0.5" stroke-dasharray="4,3"/>
+            <line x1="60" y1="105" x2="755" y2="105" stroke="#30363d" stroke-width="0.5"/>
+            <!-- Total traffic line (green, wavy) -->
+            <polyline points="60,100 90,75 120,80 150,60 175,45 200,30 215,50 240,65 260,35 280,55 300,60 325,40 350,55 375,45 400,20 420,50 445,60 470,45 495,65 520,55 545,50 570,35 595,60 620,70 645,30 670,55 695,65 720,50 750,90"
+              fill="none" stroke="#3fb950" stroke-width="1.5" opacity="0.85"/>
+            <!-- TCP spike line (red) -->
+            <line x1="200" y1="105" x2="200" y2="28" stroke="#f85149" stroke-width="1.5" opacity="0.8"/>
+            <!-- X-axis labels -->
+            <text x="60"  y="118" font-size="8" fill="#8b949e" text-anchor="middle">Jun 15, 07:08</text>
+            <text x="200" y="118" font-size="8" fill="#8b949e" text-anchor="middle">Jun 15, 07:54</text>
+            <text x="400" y="118" font-size="8" fill="#8b949e" text-anchor="middle">Jun 15, 08:40</text>
+            <text x="600" y="118" font-size="8" fill="#8b949e" text-anchor="middle">Jun 15, 09:49</text>
+            <text x="750" y="118" font-size="8" fill="#8b949e" text-anchor="middle">Jun 15, 10:35</text>
+          </svg>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;padding:10px 14px;background:var(--bg3);border-radius:6px;border-left:3px solid var(--green);font-size:12px;color:var(--text2);">
+        💡 The exported CSV must contain NetFlow-style columns: <code style="background:var(--bg2,#0d1117);padding:1px 4px;border-radius:3px;">src_ip</code>, <code style="background:var(--bg2,#0d1117);padding:1px 4px;border-radius:3px;">dst_ip</code>, <code style="background:var(--bg2,#0d1117);padding:1px 4px;border-radius:3px;">bytes</code>, <code style="background:var(--bg2,#0d1117);padding:1px 4px;border-radius:3px;">packets</code>, <code style="background:var(--bg2,#0d1117);padding:1px 4px;border-radius:3px;">protocol</code>, and optionally <code style="background:var(--bg2,#0d1117);padding:1px 4px;border-radius:3px;">dst_port</code>, <code style="background:var(--bg2,#0d1117);padding:1px 4px;border-radius:3px;">tcp_flags</code>, <code style="background:var(--bg2,#0d1117);padding:1px 4px;border-radius:3px;">start_time</code>, <code style="background:var(--bg2,#0d1117);padding:1px 4px;border-radius:3px;">end_time</code>.
+      </div>
+    </div>
+
+    <!-- ── IP REPUTATION SCORING ── -->
+    <div class="card" style="margin-bottom:18px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+        <span style="font-size:20px;">🌐</span>
+        <h3 style="color:var(--cyan);font-size:15px;font-weight:700;margin:0;">IP Reputation Scoring</h3>
+      </div>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:16px;">Each IP is checked against up to 4 threat intelligence sources. Points from all sources are summed into a final score (0–100).</p>
+
+      <!-- Sources table -->
+      <div style="margin-bottom:18px;">
+        <div style="font-size:11px;color:var(--text2);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Intelligence Sources</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead><tr style="background:var(--bg3);">
+            <th style="padding:8px 10px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">Source</th>
+            <th style="padding:8px 10px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">What It Checks</th>
+            <th style="padding:8px 10px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">Max Points</th>
+          </tr></thead>
+          <tbody>
+            <tr style="border-bottom:1px solid var(--border);">
+              <td style="padding:8px 10px;color:var(--cyan);font-weight:700;">AbuseIPDB</td>
+              <td style="padding:8px 10px;color:var(--text2);">Community abuse reports. Abuse confidence % drives the score.</td>
+              <td style="padding:8px 10px;color:var(--text);">40 pts</td>
+            </tr>
+            <tr style="border-bottom:1px solid var(--border);">
+              <td style="padding:8px 10px;color:#bc8cff;font-weight:700;">VirusTotal</td>
+              <td style="padding:8px 10px;color:var(--text2);">Number of AV/security engines that flag the IP as malicious.</td>
+              <td style="padding:8px 10px;color:var(--text);">35 pts</td>
+            </tr>
+            <tr style="border-bottom:1px solid var(--border);">
+              <td style="padding:8px 10px;color:var(--yellow);font-weight:700;">AlienVault OTX</td>
+              <td style="padding:8px 10px;color:var(--text2);">Open threat exchange pulse hits — active community threat feeds.</td>
+              <td style="padding:8px 10px;color:var(--text);">35 pts</td>
+            </tr>
+            <tr>
+              <td style="padding:8px 10px;color:var(--green);font-weight:700;">ip-api</td>
+              <td style="padding:8px 10px;color:var(--text2);">Geo/ASN context. Hosting/datacenter flag adds a risk modifier.</td>
+              <td style="padding:8px 10px;color:var(--text);">10 pts</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Verdict thresholds -->
+      <div style="font-size:11px;color:var(--text2);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Verdict Thresholds</div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;">
+        <div style="flex:1;min-width:140px;background:#2d1517;border:1px solid #f85149;border-radius:8px;padding:12px 14px;">
+          <div style="color:#f85149;font-weight:800;font-size:13px;margin-bottom:4px;">MALICIOUS</div>
+          <div style="color:var(--text2);font-size:12px;">Score ≥ 70</div>
+          <div style="color:var(--text2);font-size:11px;margin-top:4px;">High confidence threat. Confirmed by multiple sources.</div>
+        </div>
+        <div style="flex:1;min-width:140px;background:#2d1b0f;border:1px solid #f0883e;border-radius:8px;padding:12px 14px;">
+          <div style="color:#f0883e;font-weight:800;font-size:13px;margin-bottom:4px;">HIGH RISK</div>
+          <div style="color:var(--text2);font-size:12px;">Score 45 – 69</div>
+          <div style="color:var(--text2);font-size:11px;margin-top:4px;">Significant threat signals. Investigate before allowing.</div>
+        </div>
+        <div style="flex:1;min-width:140px;background:#2a1d0e;border:1px solid #d29922;border-radius:8px;padding:12px 14px;">
+          <div style="color:#d29922;font-weight:800;font-size:13px;margin-bottom:4px;">SUSPICIOUS</div>
+          <div style="color:var(--text2);font-size:12px;">Score 20 – 44</div>
+          <div style="color:var(--text2);font-size:11px;margin-top:4px;">Some indicators present. Context-dependent risk.</div>
+        </div>
+        <div style="flex:1;min-width:140px;background:#0f2518;border:1px solid #3fb950;border-radius:8px;padding:12px 14px;">
+          <div style="color:#3fb950;font-weight:800;font-size:13px;margin-bottom:4px;">CLEAN</div>
+          <div style="color:var(--text2);font-size:12px;">Score 0 – 19</div>
+          <div style="color:var(--text2);font-size:11px;margin-top:4px;">No significant threat signals detected across sources.</div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;padding:10px 14px;background:var(--bg3);border-radius:6px;border-left:3px solid var(--cyan);font-size:12px;color:var(--text2);">
+        💡 <b style="color:var(--text);">Manual Override</b> — You can override any auto verdict using the dropdown in the results table. Overrides are marked with a <span style="color:#bc8cff;font-weight:700;">manual</span> badge and persist for the current session.
+      </div>
+    </div>
+
+    <!-- ── HASH ANALYSIS SCORING ── -->
+    <div class="card" style="margin-bottom:18px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+        <span style="font-size:20px;">🔎</span>
+        <h3 style="color:#bc8cff;font-size:15px;font-weight:700;margin:0;">Hash Analysis Scoring</h3>
+      </div>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:16px;">File hashes (MD5, SHA-1, SHA-256) are submitted to VirusTotal. The verdict is determined by how many AV engines flag the file.</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px;">
+        <thead><tr style="background:var(--bg3);">
+          <th style="padding:8px 10px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">Verdict</th>
+          <th style="padding:8px 10px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">Condition</th>
+          <th style="padding:8px 10px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">Meaning</th>
+        </tr></thead>
+        <tbody>
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:8px 10px;"><span class="verdict MALICIOUS" style="font-size:10px;">MALICIOUS</span></td>
+            <td style="padding:8px 10px;color:var(--text);">≥ 5 engines flag</td>
+            <td style="padding:8px 10px;color:var(--text2);">Widely detected malware/threat file.</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:8px 10px;"><span class="verdict HIGH_RISK" style="font-size:10px;">HIGH RISK</span></td>
+            <td style="padding:8px 10px;color:var(--text);">2 – 4 engines flag</td>
+            <td style="padding:8px 10px;color:var(--text2);">Detected by a minority of engines. Likely malicious.</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:8px 10px;"><span class="verdict SUSPICIOUS" style="font-size:10px;">SUSPICIOUS</span></td>
+            <td style="padding:8px 10px;color:var(--text);">1 engine flags</td>
+            <td style="padding:8px 10px;color:var(--text2);">Single detection — could be a false positive.</td>
+          </tr>
+          <tr>
+            <td style="padding:8px 10px;"><span class="verdict CLEAN" style="font-size:10px;">CLEAN</span></td>
+            <td style="padding:8px 10px;color:var(--text);">0 engines flag</td>
+            <td style="padding:8px 10px;color:var(--text2);">No detections. File appears benign.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div style="padding:10px 14px;background:var(--bg3);border-radius:6px;border-left:3px solid var(--yellow);font-size:12px;color:var(--text2);">
+        ⚠️ <b style="color:var(--text);">Not Found</b> — If VT has never seen the hash, the result is <b>NOT FOUND</b>. This does not mean the file is safe — it may be novel or rare malware not yet submitted to VirusTotal.
+      </div>
+    </div>
+
+    <!-- ── TRAFFIC ANALYSIS SCORING ── -->
+    <div class="card" style="margin-bottom:18px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+        <span style="font-size:20px;">📡</span>
+        <h3 style="color:var(--orange,#f0883e);font-size:15px;font-weight:700;margin:0;">Traffic Analysis Scoring</h3>
+      </div>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:16px;">NetFlow/CSV traffic is analyzed for attack patterns. Each detected indicator adds to the attack score (0–100). IP reputation from auto-investigation adds a bonus on top.</p>
+
+      <!-- Attack indicators table -->
+      <div style="font-size:11px;color:var(--text2);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Attack Indicators &amp; Points</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:18px;">
+        <thead><tr style="background:var(--bg3);">
+          <th style="padding:8px 10px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">Severity</th>
+          <th style="padding:8px 10px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">Indicator</th>
+          <th style="padding:8px 10px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">Points</th>
+          <th style="padding:8px 10px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">Description</th>
+        </tr></thead>
+        <tbody>
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:8px 10px;color:#f85149;font-weight:700;">HIGH</td>
+            <td style="padding:8px 10px;color:var(--text);font-weight:600;">SYN Flood</td>
+            <td style="padding:8px 10px;color:var(--text);">+30</td>
+            <td style="padding:8px 10px;color:var(--text2);">&gt;70% of flows are pure SYN — classic volumetric DDoS.</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:8px 10px;color:#f85149;font-weight:700;">HIGH</td>
+            <td style="padding:8px 10px;color:var(--text);font-weight:600;">Layer 7 HTTP Flood</td>
+            <td style="padding:8px 10px;color:var(--text);">+25</td>
+            <td style="padding:8px 10px;color:var(--text2);">PSH+ACK dominates flows — active HTTP application flood.</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:8px 10px;color:#f85149;font-weight:700;">HIGH</td>
+            <td style="padding:8px 10px;color:var(--text);font-weight:600;">Amplification / Reflection</td>
+            <td style="padding:8px 10px;color:var(--text);">+25</td>
+            <td style="padding:8px 10px;color:var(--text2);">Avg packet size &gt;900B across most flows (DNS/NTP/SSDP abuse).</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:8px 10px;color:#f85149;font-weight:700;">HIGH</td>
+            <td style="padding:8px 10px;color:var(--text);font-weight:600;">Anomalous Flow Size</td>
+            <td style="padding:8px 10px;color:var(--text);">+20</td>
+            <td style="padding:8px 10px;color:var(--text2);">Many individual flows exceed 50 MB — abnormal for legitimate sessions.</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:8px 10px;color:#d29922;font-weight:700;">MEDIUM</td>
+            <td style="padding:8px 10px;color:var(--text);font-weight:600;">Traffic Concentration</td>
+            <td style="padding:8px 10px;color:var(--text);">+15</td>
+            <td style="padding:8px 10px;color:var(--text2);">Single source contributes &gt;60% of total bytes — abnormal dominance.</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:8px 10px;color:#d29922;font-weight:700;">MEDIUM</td>
+            <td style="padding:8px 10px;color:var(--text);font-weight:600;">UDP Flood</td>
+            <td style="padding:8px 10px;color:var(--text);">+15</td>
+            <td style="padding:8px 10px;color:var(--text2);">&gt;70% UDP flows with high packet rate — volumetric UDP attack.</td>
+          </tr>
+          <tr>
+            <td style="padding:8px 10px;color:var(--cyan);font-weight:700;">LOW</td>
+            <td style="padding:8px 10px;color:var(--text);font-weight:600;">Non-standard Ports</td>
+            <td style="padding:8px 10px;color:var(--text);">+8</td>
+            <td style="padding:8px 10px;color:var(--text2);">Traffic to unusual destination ports — possible port scanning or C2.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- IP Reputation Bonus -->
+      <div style="font-size:11px;color:var(--text2);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">IP Reputation Bonus (Auto-Investigation)</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px;">
+        <thead><tr style="background:var(--bg3);">
+          <th style="padding:8px 10px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">Source IP Verdict</th>
+          <th style="padding:8px 10px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">Bonus per IP</th>
+        </tr></thead>
+        <tbody>
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:8px 10px;"><span class="verdict MALICIOUS" style="font-size:10px;">MALICIOUS</span></td>
+            <td style="padding:8px 10px;color:var(--text);">+8 pts</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:8px 10px;"><span class="verdict HIGH_RISK" style="font-size:10px;">HIGH RISK</span></td>
+            <td style="padding:8px 10px;color:var(--text);">+5 pts</td>
+          </tr>
+          <tr>
+            <td style="padding:8px 10px;"><span class="verdict SUSPICIOUS" style="font-size:10px;">SUSPICIOUS</span></td>
+            <td style="padding:8px 10px;color:var(--text);">+2 pts</td>
+          </tr>
+        </tbody>
+      </table>
+      <div style="padding:10px 14px;background:var(--bg3);border-radius:6px;border-left:3px solid var(--orange,#f0883e);font-size:12px;color:var(--text2);margin-bottom:16px;">
+        📊 IP reputation bonus is <b style="color:var(--text);">capped at +35 pts</b> regardless of how many malicious IPs are found. Final score is capped at <b style="color:var(--text);">100</b>.
+      </div>
+
+      <!-- Traffic verdict thresholds -->
+      <div style="font-size:11px;color:var(--text2);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Traffic Verdict Thresholds</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:150px;background:#2d1517;border:1px solid #f85149;border-radius:8px;padding:12px 14px;">
+          <div style="color:#f85149;font-weight:800;font-size:13px;margin-bottom:4px;">ATTACK</div>
+          <div style="color:var(--text2);font-size:12px;">Score ≥ 55</div>
+          <div style="color:var(--text2);font-size:11px;margin-top:4px;">Active or highly probable attack. Immediate action recommended.</div>
+        </div>
+        <div style="flex:1;min-width:150px;background:#2a1d0e;border:1px solid #d29922;border-radius:8px;padding:12px 14px;">
+          <div style="color:#d29922;font-weight:800;font-size:13px;margin-bottom:4px;">SUSPICIOUS</div>
+          <div style="color:var(--text2);font-size:12px;">Score 30 – 54</div>
+          <div style="color:var(--text2);font-size:11px;margin-top:4px;">Anomalous patterns present. Monitor and investigate further.</div>
+        </div>
+        <div style="flex:1;min-width:150px;background:#0f2518;border:1px solid #3fb950;border-radius:8px;padding:12px 14px;">
+          <div style="color:#3fb950;font-weight:800;font-size:13px;margin-bottom:4px;">NORMAL</div>
+          <div style="color:var(--text2);font-size:12px;">Score &lt; 30</div>
+          <div style="color:var(--text2);font-size:11px;margin-top:4px;">No significant attack patterns detected in the traffic.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── MITRE ATT&CK MAPPING ── -->
+    <div class="card" style="margin-bottom:18px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+        <span style="font-size:20px;">🎯</span>
+        <h3 style="color:var(--red,#f85149);font-size:15px;font-weight:700;margin:0;">MITRE ATT&amp;CK Mapping</h3>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead><tr style="background:var(--bg3);">
+          <th style="padding:8px 10px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">Indicator</th>
+          <th style="padding:8px 10px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">MITRE Technique</th>
+          <th style="padding:8px 10px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">Tactic</th>
+        </tr></thead>
+        <tbody>
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:8px 10px;color:var(--text);">SYN / UDP Flood</td>
+            <td style="padding:8px 10px;color:var(--cyan);">T1498 — Network DoS</td>
+            <td style="padding:8px 10px;color:var(--text2);">Impact</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:8px 10px;color:var(--text);">HTTP Application Flood</td>
+            <td style="padding:8px 10px;color:var(--cyan);">T1499 — Endpoint DoS</td>
+            <td style="padding:8px 10px;color:var(--text2);">Impact</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:8px 10px;color:var(--text);">Amplification / Reflection</td>
+            <td style="padding:8px 10px;color:var(--cyan);">T1498.002 — Reflection Amplification</td>
+            <td style="padding:8px 10px;color:var(--text2);">Impact</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:8px 10px;color:var(--text);">Non-standard Ports</td>
+            <td style="padding:8px 10px;color:var(--cyan);">T1571 — Non-Standard Port</td>
+            <td style="padding:8px 10px;color:var(--text2);">Command &amp; Control</td>
+          </tr>
+          <tr>
+            <td style="padding:8px 10px;color:var(--text);">Malicious Source IP</td>
+            <td style="padding:8px 10px;color:var(--cyan);">T1590 — Gather Victim Network Info</td>
+            <td style="padding:8px 10px;color:var(--text2);">Reconnaissance</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══ Threshold Calculator Page ══ -->
+<div id="threshold-page" class="page">
+  <div style="max-width:1100px;margin:0 auto;">
+
+    <!-- Header -->
+    <div style="margin-bottom:20px;display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+      <div>
+        <h2 style="color:var(--cyan);font-size:20px;font-weight:700;margin-bottom:4px;">🧮 DDoS Threshold Calculator</h2>
+        <p style="color:var(--text2);font-size:13px;margin:0;">Anti-DDoS detection thresholds for Host (/32) and Network (/24) scopes. Thresholds scale automatically with customer bandwidth.</p>
+      </div>
+      <button class="btn btn-sm" onclick="exportThresholdCSV()" style="white-space:nowrap;">⬇ Export CSV</button>
+    </div>
+
+    <!-- Controls card -->
+    <div class="card" style="margin-bottom:16px;">
+      <div style="display:flex;flex-wrap:wrap;gap:28px;align-items:flex-end;">
+
+        <!-- Bandwidth -->
+        <div style="flex:1;min-width:220px;">
+          <div style="font-size:11px;color:var(--text2);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Customer Bandwidth</div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <input id="th-bw" type="number" min="1" max="100000" value="1000"
+              oninput="recalcThresholds()"
+              style="width:100px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:14px;font-weight:700;">
+            <span style="color:var(--text2);font-size:13px;">Mbps</span>
+            <input type="range" min="10" max="10000" step="10" value="1000" id="th-bw-slider"
+              oninput="document.getElementById('th-bw').value=this.value;recalcThresholds()"
+              style="flex:1;accent-color:var(--cyan);">
+          </div>
+        </div>
+
+        <!-- Scope -->
+        <div>
+          <div style="font-size:11px;color:var(--text2);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Detection Scope</div>
+          <div style="display:flex;gap:8px;">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);">
+              <input type="radio" name="th-scope" value="host" checked onchange="recalcThresholds()">
+              <span style="color:var(--text);font-size:13px;">Host <span style="color:var(--text2);font-size:11px;">/32</span></span>
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);">
+              <input type="radio" name="th-scope" value="network" onchange="recalcThresholds()">
+              <span style="color:var(--text);font-size:13px;">Network <span style="color:var(--text2);font-size:11px;">/24</span></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Mode -->
+        <div>
+          <div style="font-size:11px;color:var(--text2);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Detection Mode</div>
+          <select id="th-mode" onchange="recalcThresholds()"
+            style="background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 12px;font-size:13px;cursor:pointer;">
+            <option value="normal">Normal</option>
+            <option value="normal_plus">Normal Plus</option>
+            <option value="rapid">Rapid</option>
+            <option value="smart">Smart</option>
+          </select>
+        </div>
+
+        <!-- Category filter -->
+        <div>
+          <div style="font-size:11px;color:var(--text2);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Category</div>
+          <div class="filter-group" id="th-cat-filter">
+            <button class="filter-btn active" onclick="setThCat('ALL',this)">All</button>
+            <button class="filter-btn" onclick="setThCat('TCP',this)">TCP</button>
+            <button class="filter-btn" onclick="setThCat('UDP',this)">UDP</button>
+            <button class="filter-btn" onclick="setThCat('ICMP',this)">ICMP</button>
+            <button class="filter-btn" onclick="setThCat('HTTP',this)">HTTP</button>
+            <button class="filter-btn" onclick="setThCat('IP',this)">IP</button>
+            <button class="filter-btn" onclick="setThCat('SIP',this)">SIP</button>
+            <button class="filter-btn" onclick="setThCat('TOTAL',this)">Total</button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Mode info banner -->
+      <div id="th-mode-info" style="margin-top:14px;padding:10px 14px;background:var(--bg3);border-radius:6px;border-left:3px solid var(--cyan);font-size:12px;color:var(--text2);"></div>
+    </div>
+
+    <!-- Quick reference summary -->
+    <div id="th-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;"></div>
+
+    <!-- Threshold table -->
+    <div class="card" style="padding:0;overflow:hidden;">
+      <div style="overflow-x:auto;">
+        <table id="th-table" style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead>
+            <tr style="background:var(--bg3);position:sticky;top:0;z-index:2;">
+              <th style="padding:10px 12px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);min-width:30px;">#</th>
+              <th style="padding:10px 12px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);min-width:200px;">Signature</th>
+              <th style="padding:10px 12px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">Category</th>
+              <th style="padding:10px 12px;text-align:right;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">Low (pps)</th>
+              <th style="padding:10px 12px;text-align:right;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">High (pps)</th>
+              <th style="padding:10px 12px;text-align:right;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">Low (bps)</th>
+              <th style="padding:10px 12px;text-align:right;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">High (bps)</th>
+              <th style="padding:10px 12px;text-align:left;color:var(--text2);font-weight:600;border-bottom:1px solid var(--border);">Notes</th>
+            </tr>
+          </thead>
+          <tbody id="th-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══ Settings Page ══ -->
+<div id="settings" class="page">
+  <div class="card">
+    <h2>API Key Configuration</h2>
+    <div id="settings-alert" style="display:none;"></div>
+    <div class="alert info" style="margin-bottom:16px;">
+      🔒 Keys stored locally in <code>config.json</code>. All sources are 100% free.
+    </div>
+    <div class="settings-grid" id="settings-grid"></div>
+    <div style="margin-top:20px;display:flex;gap:10px;">
+      <button class="btn btn-primary" onclick="saveSettings()">💾 Save</button>
+      <button class="btn btn-secondary" onclick="loadSettings()">↺ Reload</button>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Free API Key Registration</h2>
+    <table style="font-size:13px;">
+      <tr><td style="padding:8px 12px;color:var(--cyan);font-weight:600;">AbuseIPDB</td><td style="padding:8px 12px;"><a href="https://www.abuseipdb.com/register" target="_blank">abuseipdb.com/register</a></td><td style="padding:8px 12px;color:var(--text2);">1,000 req/day</td></tr>
+      <tr><td style="padding:8px 12px;color:var(--cyan);font-weight:600;">VirusTotal</td><td style="padding:8px 12px;"><a href="https://www.virustotal.com/gui/join-us" target="_blank">virustotal.com/gui/join-us</a></td><td style="padding:8px 12px;color:var(--text2);">500 req/day</td></tr>
+      <tr><td style="padding:8px 12px;color:var(--cyan);font-weight:600;">AlienVault OTX</td><td style="padding:8px 12px;"><a href="https://otx.alienvault.com" target="_blank">otx.alienvault.com</a></td><td style="padding:8px 12px;color:var(--text2);">Free</td></tr>
+      <tr><td style="padding:8px 12px;color:var(--cyan);font-weight:600;">Hybrid Analysis</td><td style="padding:8px 12px;"><a href="https://www.hybrid-analysis.com/signup" target="_blank">hybrid-analysis.com/signup</a></td><td style="padding:8px 12px;color:var(--text2);">200 req/hr</td></tr>
+      <tr><td style="padding:8px 12px;color:var(--cyan);font-weight:600;">GreyNoise</td><td style="padding:8px 12px;"><a href="https://greynoise.io/plans/community" target="_blank">greynoise.io/plans/community</a></td><td style="padding:8px 12px;color:var(--text2);">25 req/week</td></tr>
+      <tr><td style="padding:8px 12px;color:var(--cyan);font-weight:600;">ThreatFox</td><td style="padding:8px 12px;"><a href="https://threatfox.abuse.ch/api/" target="_blank">threatfox.abuse.ch/api</a></td><td style="padding:8px 12px;color:var(--text2);">Free</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ══ Hash Results Page ══ -->
+<div id="hash-results-page" class="page">
+  <div id="no-hash-results" class="empty">
+    <div class="icon">🔑</div>
+    <p>No hash results yet.<br>Go to Investigate → Hash Lookup tab.</p>
+  </div>
+  <div id="hash-results-content" style="display:none;">
+    <div class="stats-bar" id="hash-stats-bar"></div>
+    <div class="card" style="padding:0;overflow:hidden;">
+      <div style="padding:16px 20px 0;display:flex;align-items:center;gap:12px;">
+        <h2 style="font-size:16px;font-weight:600;color:var(--text);margin:0;">Hash Investigation Results</h2>
+        <div class="filter-group" style="margin-left:auto;" id="hash-verdict-filter">
+          <button class="filter-btn active" onclick="setHashFilter('ALL',this)">All</button>
+          <button class="filter-btn" onclick="setHashFilter('MALICIOUS',this)">Malicious</button>
+          <button class="filter-btn" onclick="setHashFilter('SUSPICIOUS',this)">Suspicious</button>
+          <button class="filter-btn" onclick="setHashFilter('CLEAN',this)">Clean</button>
+        </div>
+      </div>
+      <div class="export-row" style="padding:8px 20px 16px;">
+        <button class="btn btn-secondary btn-sm" onclick="exportHashJSON()">⬇ JSON</button>
+        <button class="btn btn-secondary btn-sm" onclick="clearHashResults()">🗑 Clear</button>
+      </div>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th></th><th>Hash</th><th>Type</th><th>File Name</th>
+              <th>File Type</th><th>Score</th><th>Verdict</th><th>Timestamp</th>
+            </tr>
+          </thead>
+          <tbody id="hash-results-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Traffic Analysis Page ══ -->
+<div id="traffic-page" class="page">
+
+  <!-- Upload card -->
+  <div class="card" id="traffic-upload-card">
+    <h2>Traffic CSV Analysis</h2>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:20px;">
+      Upload a NetFlow/anti-DDoS CSV export. The analyzer will auto-detect the attack type, extract top sources by volume, and identify the targeted IP and ports.
+    </p>
+    <div class="traffic-upload-zone" id="traffic-drop-zone"
+         onclick="document.getElementById('traffic-csv-input').click()"
+         ondragover="event.preventDefault();this.classList.add('drag')"
+         ondragleave="this.classList.remove('drag')"
+         ondrop="handleTrafficDrop(event)">
+      <input type="file" id="traffic-csv-input" accept=".csv,.txt" onchange="handleTrafficFile(this.files[0])"/>
+      <div style="font-size:40px;margin-bottom:12px;">📡</div>
+      <div style="font-size:15px;font-weight:500;margin-bottom:6px;">Drop CSV or click to upload</div>
+      <div style="font-size:12px;color:var(--text2);">Supports NetFlow exports from anti-DDoS platforms (Arbor, Kentik, Radware, etc.)</div>
+    </div>
+    <div id="traffic-upload-status" style="display:none;margin-top:14px;font-size:13px;color:var(--text2);text-align:center;"></div>
+  </div>
+
+  <!-- Results (hidden until analysis runs) -->
+  <div id="traffic-results" style="display:none;">
+
+    <!-- Verdict banner -->
+    <div id="tv-banner" class="verdict-banner attack">
+      <div class="verdict-icon" id="tv-icon"></div>
+      <div>
+        <div class="verdict-label" id="tv-label"></div>
+        <div class="verdict-sub"  id="tv-sub"></div>
+      </div>
+      <div class="score-pill" id="tv-score"></div>
+    </div>
+
+    <!-- Top two-column: Indicators/Summary | Targets/PSD -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+
+      <!-- Left: Indicators + Summary -->
+      <div>
+        <div class="card" style="margin-bottom:16px;">
+          <h2>Attack Indicators</h2>
+          <div id="tv-indicators"></div>
+        </div>
+        <div class="card">
+          <h2>Summary</h2>
+          <div class="meta-grid" id="tv-meta"></div>
+          <div style="margin-top:12px;">
+            <div style="font-size:11px;color:var(--text2);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Protocol Distribution</div>
+            <div id="tv-proto" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+          </div>
+          <div style="margin-top:14px;">
+            <div style="font-size:11px;color:var(--text2);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">TCP Flag Distribution</div>
+            <div id="tv-flags" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Targets + Packet Size Distribution -->
+      <div>
+        <div class="card" style="margin-bottom:16px;">
+          <h2>Targeted IP &amp; Ports</h2>
+          <div style="margin-bottom:12px;">
+            <div style="font-size:11px;color:var(--text2);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Destination IP(s)</div>
+            <div id="tv-dst-ips"></div>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--text2);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Destination Ports</div>
+            <div id="tv-dst-ports"></div>
+          </div>
+        </div>
+
+        <!-- Packet size distribution chart -->
+        <div class="card" id="tv-psd-card">
+          <h2>Avg Packet Size Distribution</h2>
+          <div id="tv-psd-chart" style="margin-top:12px;"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Bottom two-column: Top 10 by Bytes | Top 10 by Packets -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+
+      <div class="card">
+        <h2>Top 10 Sources — by Bytes</h2>
+        <div style="overflow-x:auto;"><table id="tv-top-bytes">
+          <thead><tr><th>#</th><th>Source IP</th><th>Bytes</th><th>Packets</th><th>% Total</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+
+      <div class="card">
+        <h2>Top 10 Sources — by Packets</h2>
+        <div style="overflow-x:auto;"><table id="tv-top-pkts">
+          <thead><tr><th>#</th><th>Source IP</th><th>Packets</th><th>Bytes</th><th>% Total</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+
+    </div>
+
+    <div id="tv-auto-inv" style="display:none;margin-top:24px;">
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+          <h2 style="margin:0;">🔍 Auto-Investigation</h2>
+          <div style="display:flex;align-items:center;gap:8px;font-size:13px;flex-wrap:wrap;">
+            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;">
+              <input type="radio" name="tv-inv-mode" id="tv-inv-mode-top" value="top" checked onchange="updateInvModeUI()">
+              <span style="color:var(--text2);">Top</span>
+              <input id="tv-inv-count" type="number" min="1" max="9999" value="10"
+                     style="width:58px;padding:4px 8px;background:var(--bg-input,#21262d);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;text-align:center;"
+                     oninput="document.getElementById('tv-inv-mode-top').checked=true;">
+              <span style="color:var(--text2);">unique IPs</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;">
+              <input type="radio" name="tv-inv-mode" id="tv-inv-mode-all" value="all" onchange="updateInvModeUI()">
+              <span id="tv-inv-all-label" style="color:var(--text2);">All unique IPs</span>
+            </label>
+            <button class="btn btn-sm" id="tv-inv-run-btn" onclick="rerunAutoInvestigation()"
+                    style="padding:4px 12px;font-size:12px;">▶ Run</button>
+          </div>
+        </div>
+        <div id="tv-inv-status" style="font-size:13px;color:var(--text2);margin-bottom:12px;"></div>
+        <div id="tv-inv-progress-bar" style="height:6px;background:var(--border);border-radius:3px;margin-bottom:16px;display:none;">
+          <div id="tv-inv-bar-fill" style="height:100%;background:var(--cyan);border-radius:3px;width:0%;transition:width 0.3s;"></div>
+        </div>
+
+        <!-- Stats bar -->
+        <div id="tv-inv-stats" style="display:none;margin-bottom:12px;">
+          <div class="stats-bar" id="tv-inv-stats-bar"></div>
+        </div>
+
+        <!-- Filter panel -->
+        <div id="tv-inv-filter-panel" style="display:none;background:var(--card-alt,#161b22);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px;">
+          <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start;">
+            <!-- Verdict filter -->
+            <div>
+              <div style="font-size:11px;color:var(--text2);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Verdict</div>
+              <div class="filter-group" id="tv-inv-verdict-filter-group">
+                <button class="filter-btn active" onclick="setTrafficInvVerdictFilter('ALL',this)">All</button>
+                <button class="filter-btn" onclick="setTrafficInvVerdictFilter('MALICIOUS',this)">Malicious</button>
+                <button class="filter-btn" onclick="setTrafficInvVerdictFilter('HIGH RISK',this)">High Risk</button>
+                <button class="filter-btn" onclick="setTrafficInvVerdictFilter('SUSPICIOUS',this)">Suspicious</button>
+                <button class="filter-btn" onclick="setTrafficInvVerdictFilter('CLEAN',this)">Clean</button>
+              </div>
+            </div>
+            <!-- Top 10 Traffic filter -->
+            <div>
+              <div style="font-size:11px;color:var(--text2);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Traffic Rank</div>
+              <button id="tv-inv-top10-btn" class="filter-btn" onclick="toggleTrafficInvTop10Filter(this)"
+                style="display:flex;align-items:center;gap:5px;">
+                <span style="background:var(--orange,#f0883e);color:#000;font-size:9px;font-weight:800;padding:1px 5px;border-radius:3px;letter-spacing:.3px;">TOP 10</span>
+                Only
+              </button>
+            </div>
+            <!-- Score range -->
+            <div>
+              <div style="font-size:11px;color:var(--text2);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">
+                Score: <span id="tv-inv-score-label" style="color:var(--cyan);">0 – 100</span>
+              </div>
+              <div class="range-wrap">
+                <div class="range-track"><div class="range-fill" id="tv-inv-range-fill" style="left:0%;width:100%;"></div></div>
+                <input type="range" id="tv-inv-score-min" min="0" max="100" value="0"   oninput="onTrafficInvRangeChange()">
+                <input type="range" id="tv-inv-score-max" min="0" max="100" value="100" oninput="onTrafficInvRangeChange()">
+              </div>
+            </div>
+            <!-- IP Search -->
+            <div style="margin-left:auto;">
+              <div style="font-size:11px;color:var(--text2);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Search IP</div>
+              <div style="position:relative;">
+                <span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--text2);font-size:13px;pointer-events:none;">🔍</span>
+                <input id="tv-inv-ip-search" type="text" placeholder="e.g. 192.168" oninput="onTrafficInvSearch()"
+                  style="background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 10px 5px 28px;font-size:12px;width:180px;outline:none;"
+                  onfocus="this.style.borderColor='var(--cyan)'" onblur="this.style.borderColor='var(--border)'">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bulk action bar -->
+        <div class="bulk-bar" id="tv-inv-bulk-bar">
+          <span id="tv-inv-bulk-count" style="font-size:12px;color:var(--cyan);font-weight:600;"></span>
+          <span style="font-size:12px;color:var(--text2);">selected</span>
+          <button class="btn btn-secondary btn-sm" style="font-size:11px;padding:3px 10px;" onclick="clearTrafficInvSelection()">Deselect All</button>
+        </div>
+
+        <div id="tv-inv-results"></div>
+        <div id="tv-inv-view-btn" style="margin-top:12px;display:none;">
+          <button class="btn btn-sm" onclick="showPage('results-page',document.querySelector('[onclick*=results-page]'))">View Full Results Page</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:16px;display:flex;gap:8px;align-items:center;">
+      <button class="btn btn-secondary btn-sm" onclick="resetTrafficAnalysis()">↺ Analyze Another File</button>
+      <button class="btn btn-sm" id="tv-export-pdf-btn" onclick="exportTrafficPDF()" style="background:var(--red);border-color:var(--red);">📄 Export Traffic PDF</button>
+      <span id="tv-pdf-status" style="font-size:12px;color:var(--text2);"></span>
+    </div>
+  </div>
+
+</div>
+
+</main>
+</div><!-- .app -->
+
+<script>
+// ── State ──────────────────────────────────────────────────────────
+var allResults      = [];
+var activeTab       = 'single';
+var uploadedIPs     = [];
+var manualVerdicts  = {};       // { ip: 'SUSPICIOUS' }
+var trafficInvManualVerdicts = {};  // manual overrides for traffic auto-investigation
+var trafficAnalysisData      = null; // full traffic analysis result for PDF export
+var trafficInvAllResults     = [];  // stored for recalc
+var trafficBaseScore         = 0;   // original attack score before reputation bonus
+var trafficBaseIndicators    = 0;   // original indicator count
+var trafficInvVerdictFilter  = 'ALL';
+var trafficInvScoreMin       = 0;
+var trafficInvScoreMax       = 100;
+var trafficInvSelected       = {};  // { ip: true } for checkbox selection
+var trafficInvSearchQuery     = '';  // IP search filter
+var trafficInvTop10Filter     = false;  // show only top-10-by-bytes IPs
+var trafficInvTop10Set        = {};  // set of top-10 IPs by bytes
+var trafficInvAbortController = null;  // for pausing/aborting investigation
+var verdictFilter   = 'ALL';
+var scoreMin        = 0;
+var scoreMax        = 100;
+var inlineFilter    = 'ALL';
+var lastInlineData  = null;
+var selectedSources = {};       // { sourceName: true }
+
+// ── Page navigation ───────────────────────────────────────────────
+function showPage(id, btn) {
+  document.querySelectorAll('.page').forEach(function(p){ p.classList.remove('active'); });
+  document.getElementById(id).classList.add('active');
+  document.querySelectorAll('nav button').forEach(function(b){ b.classList.remove('active'); });
+  if (btn) btn.classList.add('active');
+  if (id === 'settings') loadSettings();
+  if (id === 'results-page') renderResults();
+}
+
+function switchTab(name, btn) {
+  activeTab = name;
+  document.querySelectorAll('.tab-btn').forEach(function(b){ b.classList.remove('active'); });
+  document.querySelectorAll('.tab-content').forEach(function(c){ c.classList.remove('active'); });
+  btn.classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
+}
+
+// ── File upload ───────────────────────────────────────────────────
+var zone = document.getElementById('upload-zone');
+zone.addEventListener('dragover', function(e){ e.preventDefault(); zone.classList.add('drag'); });
+zone.addEventListener('dragleave', function(){ zone.classList.remove('drag'); });
+zone.addEventListener('drop', function(e){
+  e.preventDefault(); zone.classList.remove('drag');
+  if (e.dataTransfer.files[0]) processFile(e.dataTransfer.files[0]);
+});
+
+function handleFileUpload(input) { if (input.files[0]) processFile(input.files[0]); }
+
+function processFile(file) {
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    var lines = e.target.result.split('\n')
+      .map(function(l){ return l.trim(); })
+      .filter(function(l){ return l && !l.startsWith('#'); });
+    uploadedIPs = lines;
+    // Populate unified input with file contents
+    var ta = document.getElementById('unified-input');
+    if (ta) { ta.value = lines.join('\n'); updateInputPreview(); }
+    var preview = document.getElementById('upload-preview');
+    preview.style.display = 'block';
+    preview.innerHTML = '<div class="alert info">📁 <strong>' + esc(file.name) + '</strong> — ' + lines.length + ' IP(s) loaded</div>'
+      + '<div style="max-height:120px;overflow-y:auto;background:var(--bg3);border-radius:6px;padding:10px;font-size:12px;font-family:Consolas,monospace;color:var(--text2);">'
+      + lines.slice(0,20).map(esc).join('<br>') + (lines.length > 20 ? '<br>... and ' + (lines.length-20) + ' more' : '') + '</div>';
+  };
+  reader.readAsText(file);
+}
+
+function clearAll() {
+  document.getElementById('unified-input').value = '';
+  var up = document.getElementById('upload-preview');
+  if (up) up.style.display = 'none';
+  var fi = document.getElementById('file-input');
+  if (fi) fi.value = '';
+  var pr = document.getElementById('input-preview');
+  if (pr) pr.style.display = 'none';
+  document.getElementById('inline-results').style.display = 'none';
+  document.getElementById('inv-status').textContent = '';
+  uploadedIPs = [];
+}
+
+// ── Active sources selector ───────────────────────────────────────
+function getActiveSources() {
+  return Array.from(document.querySelectorAll('.src-toggle input:checked'))
+    .map(function(cb){ return cb.closest('.src-toggle').dataset.src; });
+}
+function updateSourcesSummary() {
+  var active = getActiveSources();
+  var total  = document.querySelectorAll('.src-toggle').length;
+  var el     = document.getElementById('sources-summary');
+  if (active.length === total) { el.textContent = ''; }
+  else if (active.length === 0) { el.innerHTML = '<span style="color:var(--red);">⚠ No sources selected</span>'; }
+  else { el.innerHTML = '<span style="color:var(--cyan);">' + active.length + ' of ' + total + ' active</span>'; }
+}
+
+// ── Investigate (SSE streaming) ───────────────────────────────────
+function parseUnifiedInput() {
+  // Read from unified textarea OR uploaded file lines
+  var raw_text = document.getElementById('unified-input').value;
+  var lines    = raw_text.split(/[\n,]+/).map(function(s){ return s.trim(); }).filter(Boolean);
+  // Also include any uploaded IPs
+  if (uploadedIPs.length && !raw_text.trim()) lines = uploadedIPs;
+  var ips    = [];
+  var hashes = [];
+  var invalid = [];
+  lines.forEach(function(l) {
+    if (isValidIP(l)) ips.push(l);
+    else if (/^[0-9a-fA-F]{32}$/.test(l) || /^[0-9a-fA-F]{40}$/.test(l) || /^[0-9a-fA-F]{64}$/.test(l)) hashes.push(l.toLowerCase());
+    else if (l) invalid.push(l);
+  });
+  return { ips: ips, hashes: hashes, invalid: invalid };
+}
+
+function isValidIP(s) {
+  return /^(\d{1,3}\.){3}\d{1,3}$/.test(s) &&
+    s.split('.').every(function(p){ return parseInt(p) <= 255; });
+}
+
+function updateInputPreview() {
+  var p = parseUnifiedInput();
+  var el = document.getElementById('input-preview');
+  if (!p.ips.length && !p.hashes.length) { el.style.display = 'none'; return; }
+  el.style.display = 'flex';
+  el.innerHTML =
+    (p.ips.length    ? '<span style="color:var(--cyan);">&#128205; ' + p.ips.length + ' IP' + (p.ips.length>1?'s':'') + '</span>' : '') +
+    (p.hashes.length ? '<span style="color:var(--purple);">&#128273; ' + p.hashes.length + ' Hash' + (p.hashes.length>1?'es':'') + '</span>' : '') +
+    (p.invalid.length? '<span style="color:var(--text2);">&#10005; ' + p.invalid.length + ' unrecognized</span>' : '');
+}
+
+function runInvestigation() {
+  var parsed = parseUnifiedInput();
+  var ips    = parsed.ips;
+  var hashes = parsed.hashes;
+
+  if (!ips.length && !hashes.length) {
+    setStatus('Enter at least one IP or hash', 'error'); return;
+  }
+  if (ips.length > 50)    { setStatus('Max 50 IPs per request', 'error'); return; }
+  if (hashes.length > 20) { setStatus('Max 20 hashes per request', 'error'); return; }
+
+  var ipSources   = getActiveSources();
+  var hashSources = getHashSources();
+  if (ips.length && !ipSources.length)   { setStatus('Select at least one IP source', 'error'); return; }
+  if (hashes.length && !hashSources.length) { setStatus('Select at least one hash source', 'error'); return; }
+
+  var btn = document.getElementById('investigate-btn');
+  btn.disabled = true; btn.textContent = 'Investigating...';
+  document.getElementById('loading').style.display = 'block';
+  document.getElementById('inline-results').style.display = 'none';
+  document.getElementById('progress-fill').style.width = '0%';
+  document.getElementById('progress-count').textContent = '';
+  document.getElementById('progress-pct').textContent   = '';
+  document.getElementById('progress-ip').textContent    = '';
+  setStatus('');
+
+  var totalItems = ips.length + hashes.length;
+  var doneItems  = 0;
+  var ipSessionResults   = [];
+  var hashSessionResults = [];
+  var pendingStreams      = (ips.length ? 1 : 0) + (hashes.length ? 1 : 0);
+
+  function onAllDone() {
+    if (ipSessionResults.length) {
+      allResults = allResults.concat(ipSessionResults);
+      updateResultsCount();
+    }
+    if (hashSessionResults.length) {
+      hashResults = hashResults.concat(hashSessionResults);
+      updateHashCount();
+      renderHashResults();
+    }
+
+    // Render inline results for IPs
+    if (ipSessionResults.length) {
+      var summary = buildSummary(ipSessionResults);
+      renderInlineResults({ results: ipSessionResults, summary: summary });
+    }
+
+    // Render inline hash results below IP results (or standalone if no IPs)
+    if (hashSessionResults.length) {
+      renderInlineHashResults(hashSessionResults);
+    }
+
+    document.getElementById('loading').style.display = 'none';
+    resetBtn(btn);
+    // Navigate to hash results if ONLY hashes (no IPs)
+    if (!ipSessionResults.length && hashSessionResults.length) {
+      showPage('hash-results-page', document.querySelectorAll('nav button')[2]);
+    }
+  }
+  function updateProgress(label) {
+    doneItems++;
+    var pct = Math.round(doneItems / totalItems * 100);
+    document.getElementById('progress-fill').style.width = pct + '%';
+    document.getElementById('progress-count').textContent = doneItems + ' / ' + totalItems;
+    document.getElementById('progress-pct').textContent   = '(' + pct + '%)';
+    document.getElementById('progress-ip').textContent    = '&#10003; ' + label;
+  }
+
+  function streamSSE(url, body, onResult, label) {
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function(res) {
+      if (!res.ok) return res.json().then(function(e){ setStatus(e.error||'Failed','error'); });
+      var reader=res.body.getReader(), decoder=new TextDecoder(), buf='';
+      function read() {
+        return reader.read().then(function(chunk) {
+          if (chunk.done) { pendingStreams--; if (!pendingStreams) onAllDone(); return; }
+          buf += decoder.decode(chunk.value,{stream:true});
+          var lines=buf.split('\n'); buf=lines.pop();
+          lines.forEach(function(line) {
+            if (!line.startsWith('data: ')) return;
+            var evt; try{evt=JSON.parse(line.slice(6));}catch(e){return;}
+            if (evt.type==='start') {
+              document.getElementById('loading-msg').textContent =
+                'Investigating ' + (ips.length?ips.length+' IP'+(ips.length>1?'s':''):'') +
+                (ips.length&&hashes.length?' + ':'') +
+                (hashes.length?hashes.length+' hash'+(hashes.length>1?'es':''):'') + '...';
+            } else if (evt.type==='result') {
+              onResult(evt.result);
+              var lbl = evt.result.ip || (evt.result.hash||'').slice(0,16)+'...';
+              updateProgress(lbl + ' → ' + evt.result.verdict);
+            }
+          });
+          return read();
+        });
+      }
+      return read();
+    }).catch(function(e){ setStatus('Error: '+e.message,'error'); pendingStreams--; if(!pendingStreams) onAllDone(); });
+  }
+
+  if (ips.length) {
+    streamSSE('/api/investigate/stream',
+      { ips: ips, active_sources: ipSources },
+      function(r){ ipSessionResults.push(r); },
+      'IP');
+  }
+  if (hashes.length) {
+    streamSSE('/api/investigate/hash/stream',
+      { hashes: hashes, active_sources: hashSources },
+      function(r){ hashSessionResults.push(r); },
+      'Hash');
+  }
+}
+
+function buildSummary(results) {
+  return {
+    total:      results.length,
+    malicious:  results.filter(function(r){return r.verdict==='MALICIOUS';}).length,
+    high_risk:  results.filter(function(r){return r.verdict==='HIGH RISK';}).length,
+    suspicious: results.filter(function(r){return r.verdict==='SUSPICIOUS';}).length,
+    clean:      results.filter(function(r){return r.verdict==='CLEAN';}).length,
+  };
+}
+
+
+function resetBtn(btn) {
+  btn.disabled = false;
+  btn.textContent = '🔎 Investigate';
+}
+function setStatus(msg, type) {
+  var el = document.getElementById('inv-status');
+  el.textContent = msg;
+  el.style.color = type === 'error' ? 'var(--red)' : type === 'warn' ? 'var(--yellow)' : 'var(--text2)';
+}
+
+// ── Score helpers ─────────────────────────────────────────────────
+function scoreColor(s) {
+  if (s >= 70) return 'var(--red)';
+  if (s >= 45) return 'var(--orange)';
+  if (s >= 20) return 'var(--yellow)';
+  return 'var(--green)';
+}
+function verdictFromScore(s) {
+  if (s >= 70) return 'MALICIOUS';
+  if (s >= 45) return 'HIGH RISK';
+  if (s >= 20) return 'SUSPICIOUS';
+  return 'CLEAN';
+}
+function getEffectiveScore(r) {
+  var sel = Object.keys(selectedSources);
+  if (!sel.length) return r.score;
+  var sum = 0;
+  r.sources.forEach(function(s) {
+    if (selectedSources[s.source] && s.score > 0) sum += s.score;
+  });
+  return Math.min(Math.round(sum * 10) / 10, 100);
+}
+
+// ── Result row ────────────────────────────────────────────────────
+function resultRow(r, inline) {
+  var uid     = 'row-' + r.ip.replace(/\./g,'-') + '-' + Date.now() + Math.random().toString(36).slice(2);
+  var override = manualVerdicts[r.ip];
+  var effScore = getEffectiveScore(r);
+  var isRecalc = Object.keys(selectedSources).length > 0 && effScore !== r.score;
+  var displayScore   = isRecalc ? effScore : r.score;
+  var displayVerdict = override || (isRecalc ? verdictFromScore(effScore) : r.verdict);
+
+  var sourcesHtml = r.sources.map(function(s) {
+    var hasHit = s.score > 0;
+    return '<span style="font-size:11px;color:' + (hasHit ? 'var(--cyan)' : 'var(--text2)') + ';display:inline-block;margin-right:4px;">' + esc(s.source) + '</span>';
+  }).join('');
+
+  var detailHtml = r.sources.map(function(s) {
+    var iocLines = (s.ioc || []).map(function(l){ return '<div class="ioc-line">' + esc(l) + '</div>'; }).join('');
+    var sign  = s.score > 0 ? '+' + s.score : s.score < 0 ? '' + s.score : '0';
+    var sc    = s.score >= 20 ? 'var(--red)' : s.score >= 10 ? 'var(--orange)' : s.score > 0 ? 'var(--yellow)' : 'var(--text2)';
+    var link  = s.url ? '<a class="src-link" href="' + esc(s.url) + '" target="_blank" rel="noopener">🔗 View on ' + esc(s.source) + ' ↗</a>' : '';
+    return '<div class="source-card">'
+      + '<h4>' + esc(s.source) + '<span style="color:' + sc + ';font-weight:600;">' + sign + ' pts</span></h4>'
+      + (s.error ? '<div class="err">⚠ ' + esc(s.error) + '</div>' : '')
+      + iocLines + link + '</div>';
+  }).join('');
+
+  var colSpan = inline ? 6 : 8;
+  var checkboxCol = inline ? '' :
+    '<td><input type="checkbox" class="row-cb ip-select-cb" data-ip="' + esc(r.ip) + '" onchange="onRowCheckbox(this)"></td>';
+  var overrideCol = inline ? '' :
+    '<td><select class="override-select' + (override ? ' overridden' : '') + '" onchange="setManualVerdict(\'' + r.ip + '\',this)">'
+    + '<option value="">Auto</option>'
+    + ['MALICIOUS','HIGH RISK','SUSPICIOUS','CLEAN'].map(function(v){
+        return '<option value="' + v + '"' + (override === v ? ' selected' : '') + '>' + v + '</option>';
+      }).join('')
+    + '</select></td>';
+
+  var vclass = displayVerdict.replace(' ', '_');
+  return '<tr data-score="' + r.score + '" data-verdict="' + r.verdict + '" data-ip="' + esc(r.ip) + '">'
+    + checkboxCol
+    + '<td><button class="expand-btn" onclick="toggleDetail(\'' + uid + '\')">▶</button></td>'
+    + '<td class="ip-cell">' + esc(r.ip) + '</td>'
+    + '<td><div class="score-bar-wrap">'
+    +   '<div class="score-bar"><div class="score-bar-fill" style="width:' + displayScore + '%;background:' + scoreColor(displayScore) + ';"></div></div>'
+    +   '<span class="score-val" style="color:' + scoreColor(displayScore) + ';">' + displayScore + '</span>'
+    + '</div>' + (isRecalc ? '<div style="font-size:10px;color:var(--text2);">orig: ' + r.score + '</div>' : '') + '</td>'
+    + '<td><span class="verdict ' + vclass + '">' + displayVerdict + '</span>'
+    +   (override ? '<span class="mini-badge badge-manual">manual</span>' : '')
+    +   (isRecalc && !override ? '<span class="mini-badge badge-filtered">filtered</span>' : '')
+    + '</td>'
+    + '<td style="max-width:220px;">' + sourcesHtml + '</td>'
+    + '<td style="color:var(--text2);font-size:12px;white-space:nowrap;">' + esc(r.timestamp) + '</td>'
+    + overrideCol
+    + '</tr>'
+    + '<tr id="' + uid + '" class="detail-row"><td colspan="' + colSpan + '"><div class="sources-grid">' + detailHtml + '</div></td></tr>';
+}
+
+function toggleDetail(id) {
+  var row = document.getElementById(id);
+  var btn = row.previousElementSibling.querySelector('.expand-btn');
+  if (row.classList.toggle('open')) btn.textContent = '▼';
+  else btn.textContent = '▶';
+}
+
+// ── Manual verdict ────────────────────────────────────────────────
+function setManualVerdict(ip, sel) {
+  if (sel.value) { manualVerdicts[ip] = sel.value; sel.classList.add('overridden'); }
+  else           { delete manualVerdicts[ip]; sel.classList.remove('overridden'); }
+  renderResults();
+}
+
+// ── Inline results ────────────────────────────────────────────────
+function renderInlineResults(data) {
+  lastInlineData = data;
+  inlineFilter = 'ALL';
+  drawInline(data);
+}
+
+function drawInline(data) {
+  var container = document.getElementById('inline-results');
+  container.style.display = 'block';
+  var s = data.summary;
+
+  var stats = '<div class="stats-bar">'
+    + statCard(s.total,     'Total',     '',          'ALL')
+    + statCard(s.malicious, 'Malicious', 'malicious', 'MALICIOUS')
+    + statCard(s.high_risk, 'High Risk', 'high_risk', 'HIGH RISK')
+    + statCard(s.suspicious,'Suspicious','suspicious','SUSPICIOUS')
+    + statCard(s.clean,     'Clean',     'clean',     'CLEAN')
+    + '</div>';
+
+  var filtered = inlineFilter === 'ALL' ? data.results.slice()
+    : data.results.filter(function(r){ return r.verdict === inlineFilter; });
+  var _vOrdI = {MALICIOUS:4,'HIGH RISK':3,SUSPICIOUS:2,CLEAN:1};
+  filtered.sort(function(a,b){
+    var oa = _vOrdI[a.verdict]||0, ob = _vOrdI[b.verdict]||0;
+    if (ob !== oa) return ob - oa;
+    return b.score - a.score;
+  });
+
+  var chips = ['ALL','MALICIOUS','HIGH RISK','SUSPICIOUS','CLEAN'].map(function(v) {
+    return '<button class="filter-btn' + (inlineFilter === v ? ' active' : '') + '" onclick="setInlineFilter(\'' + v + '\')">'
+      + (v === 'ALL' ? 'All' : v) + '</button>';
+  }).join('');
+
+  var rows = filtered.map(function(r){ return resultRow(r, true); }).join('');
+  var label = inlineFilter === 'ALL' ? data.results.length + ' IP(s)'
+    : filtered.length + ' of ' + data.results.length + ' — ' + inlineFilter;
+
+  container.innerHTML = '<div class="card">'
+    + '<h2>Latest Results — ' + label + '</h2>'
+    + stats
+    + '<div class="inline-filter">' + chips + '</div>'
+    + '<div style="overflow-x:auto;"><table>'
+    + '<thead><tr><th></th><th>IP</th><th>Score</th><th>Verdict</th><th>Sources</th><th>Timestamp</th></tr></thead>'
+    + '<tbody>' + (rows || '<tr><td colspan="6" style="text-align:center;color:var(--text2);padding:20px;">No results match filter</td></tr>') + '</tbody>'
+    + '</table></div>'
+    + '<div style="margin-top:12px;display:flex;gap:8px;">'
+    + '<button class="btn btn-secondary btn-sm" onclick="showPage(\'results-page\',document.querySelectorAll(\'nav button\')[1])">View All Results →</button>'
+    + '<button class="btn btn-primary btn-sm" onclick="exportPDF()">📄 Export PDF</button>'
+    + '</div></div>';
+}
+
+function statCard(val, lbl, cls, filterVal) {
+  return '<div class="stat-card ' + cls + '" style="cursor:pointer;" onclick="setInlineFilter(\'' + filterVal + '\')">'
+    + '<div class="val">' + val + '</div><div class="lbl">' + lbl + '</div></div>';
+}
+
+function setInlineFilter(v) {
+  inlineFilter = v;
+  if (lastInlineData) drawInline(lastInlineData);
+}
+
+// ── Results page filters ──────────────────────────────────────────
+function setVerdictFilter(v, btn) {
+  verdictFilter = v;
+  document.querySelectorAll('#verdict-filter-group .filter-btn').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+  renderResults();
+}
+
+function onRangeChange() {
+  var minEl = document.getElementById('score-min');
+  var maxEl = document.getElementById('score-max');
+  scoreMin = parseInt(minEl.value);
+  scoreMax = parseInt(maxEl.value);
+  if (scoreMin > scoreMax) {
+    if (document.activeElement === minEl) { scoreMax = scoreMin; maxEl.value = scoreMax; }
+    else { scoreMin = scoreMax; minEl.value = scoreMin; }
+  }
+  document.getElementById('score-range-label').textContent = scoreMin + ' – ' + scoreMax;
+  var fill = document.getElementById('range-fill');
+  fill.style.left  = scoreMin + '%';
+  fill.style.width = (scoreMax - scoreMin) + '%';
+  renderResults();
+}
+
+function toggleSourceFilter(btn) {
+  var src = btn.dataset.src;
+  if (selectedSources[src]) {
+    delete selectedSources[src];
+    btn.classList.remove('active');
+  } else {
+    selectedSources[src] = true;
+    btn.classList.add('active');
+  }
+  renderResults();
+}
+
+function clearSourceFilter() {
+  selectedSources = {};
+  document.querySelectorAll('.src-multi').forEach(function(b){ b.classList.remove('active'); });
+  renderResults();
+}
+
+function getSourceLogic() {
+  var el = document.querySelector('input[name="src-logic"]:checked');
+  return el ? el.value : 'OR';
+}
+
+// ── Render results page ───────────────────────────────────────────
+function renderResults() {
+  var content = document.getElementById('results-content');
+  var empty   = document.getElementById('no-results');
+  if (!allResults.length) { content.style.display = 'none'; empty.style.display = 'block'; return; }
+  content.style.display = 'block';
+  empty.style.display   = 'none';
+
+  var s = {
+    total:      allResults.length,
+    malicious:  allResults.filter(function(r){ return (manualVerdicts[r.ip]||r.verdict) === 'MALICIOUS'; }).length,
+    high_risk:  allResults.filter(function(r){ return (manualVerdicts[r.ip]||r.verdict) === 'HIGH RISK'; }).length,
+    suspicious: allResults.filter(function(r){ return (manualVerdicts[r.ip]||r.verdict) === 'SUSPICIOUS'; }).length,
+    clean:      allResults.filter(function(r){ return (manualVerdicts[r.ip]||r.verdict) === 'CLEAN'; }).length,
+  };
+  document.getElementById('stats-bar').innerHTML =
+    statCard(s.total,'Total','','ALL') +
+    statCard(s.malicious,'Malicious','malicious','MALICIOUS') +
+    statCard(s.high_risk,'High Risk','high_risk','HIGH RISK') +
+    statCard(s.suspicious,'Suspicious','suspicious','SUSPICIOUS') +
+    statCard(s.clean,'Clean','clean','CLEAN');
+
+  var logic   = getSourceLogic();
+  var selSrcs = Object.keys(selectedSources);
+
+  var filtered = allResults.filter(function(r) {
+    var effScore   = getEffectiveScore(r);
+    var effVerdict = manualVerdicts[r.ip] || (Object.keys(selectedSources).length > 0 ? verdictFromScore(effScore) : r.verdict);
+    if (verdictFilter !== 'ALL' && effVerdict !== verdictFilter) return false;
+    if (effScore < scoreMin || effScore > scoreMax) return false;
+    if (selSrcs.length > 0) {
+      var hitSources = r.sources.filter(function(s){ return s.score > 0; }).map(function(s){ return s.source; });
+      if (logic === 'AND') {
+        if (!selSrcs.every(function(src){ return hitSources.indexOf(src) >= 0; })) return false;
+      } else {
+        if (!selSrcs.some(function(src){ return hitSources.indexOf(src) >= 0; })) return false;
+      }
+    }
+    return true;
+  });
+
+  // Sort: highest verdict + score first
+  var _vOrd = {MALICIOUS:4,'HIGH RISK':3,SUSPICIOUS:2,CLEAN:1};
+  filtered.sort(function(a,b){
+    var va = manualVerdicts[a.ip]||a.verdict, vb = manualVerdicts[b.ip]||b.verdict;
+    var oa = _vOrd[va]||0, ob = _vOrd[vb]||0;
+    if (ob !== oa) return ob - oa;
+    return getEffectiveScore(b) - getEffectiveScore(a);
+  });
+
+  var fc = document.getElementById('filtered-count');
+  if (fc) fc.textContent = filtered.length < allResults.length ? '(' + filtered.length + ' of ' + allResults.length + ')' : '';
+
+  var tbody = document.getElementById('results-tbody');
+  tbody.innerHTML = filtered.length
+    ? filtered.map(function(r){ return resultRow(r, false); }).join('')
+    : '<tr><td colspan="8" style="text-align:center;color:var(--text2);padding:30px;">No results match current filters</td></tr>';
+  // Reset bulk selection after re-render
+  var bar = document.getElementById('bulk-bar');
+  if (bar) bar.classList.remove('visible');
+  var masterCb = document.getElementById('select-all-cb');
+  if (masterCb) { masterCb.checked = false; masterCb.indeterminate = false; }
+}
+
+function updateResultsCount() {
+  var el = document.getElementById('results-count');
+  if (allResults.length) { el.style.display = 'inline'; el.textContent = allResults.length; }
+}
+
+function clearResults() {
+  allResults     = [];
+  manualVerdicts = {};
+  selectedSources= {};
+  verdictFilter  = 'ALL';
+  scoreMin = 0; scoreMax = 100;
+  document.querySelectorAll('.src-multi').forEach(function(b){ b.classList.remove('active'); });
+  document.querySelectorAll('#verdict-filter-group .filter-btn').forEach(function(b){ b.classList.remove('active'); });
+  document.querySelector('#verdict-filter-group .filter-btn').classList.add('active');
+  document.getElementById('results-count').style.display = 'none';
+  renderResults();
+}
+
+// ── Export ────────────────────────────────────────────────────────
+function exportPDF() {
+  // Collect selected IPs (checkboxes on results page)
+  var checked = Array.from(document.querySelectorAll('.ip-select-cb:checked'));
+  var toExport;
+  if (checked.length > 0) {
+    var selIPs = checked.map(function(cb){ return cb.dataset.ip; });
+    toExport = allResults.filter(function(r){ return selIPs.indexOf(r.ip) >= 0; });
+  } else {
+    toExport = allResults;
+  }
+  if (!toExport.length) { alert('No results to export.'); return; }
+
+  // Apply manual verdict overrides before sending to PDF
+  var payload = toExport.map(function(r) {
+    var copy = Object.assign({}, r);
+    if (manualVerdicts[r.ip]) copy.verdict = manualVerdicts[r.ip];
+    return copy;
+  });
+
+  var btn = document.getElementById('pdf-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Generating...'; }
+
+  fetch('/api/export/pdf', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ results: payload })
+  }).then(function(res) {
+    if (!res.ok) return res.json().then(function(e){ alert('PDF error: ' + e.error); });
+    return res.blob().then(function(blob) {
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'ip_report_' + ts() + '.pdf';
+      a.click();
+    });
+  }).catch(function(e){ alert('Error: ' + e.message); })
+  .finally(function(){
+    if (btn) { btn.disabled = false; updatePDFBtn(); }
+  });
+}
+
+function updatePDFBtn() {
+  var btn = document.getElementById('pdf-btn');
+  if (!btn) return;
+  var n = document.querySelectorAll('.ip-select-cb:checked').length;
+  btn.textContent = n > 0 ? '📄 Export Selected (' + n + ')' : '📄 Export PDF';
+}
+
+function exportJSON() {
+  download(new Blob([JSON.stringify(allResults,null,2)],{type:'application/json'}), 'ip_report_'+ts()+'.json');
+}
+function exportCSV() {
+  var rows = [['IP','Score','Verdict','Timestamp']];
+  allResults.forEach(function(r){ rows.push([r.ip, r.score, r.verdict, r.timestamp]); });
+  var csv = rows.map(function(r){ return r.map(function(v){ return '"'+v+'"'; }).join(','); }).join('\n');
+  download(new Blob([csv],{type:'text/csv'}), 'ip_report_'+ts()+'.csv');
+}
+function download(blob, name) { var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click(); }
+function ts() { return new Date().toISOString().replace(/[:.]/g,'-').slice(0,19); }
+
+// ── Settings ──────────────────────────────────────────────────────
+var API_KEYS = [
+  {key:'ABUSEIPDB_KEY',  label:'AbuseIPDB',      hint:'abuseipdb.com/register'},
+  {key:'VIRUSTOTAL_KEY', label:'VirusTotal',      hint:'virustotal.com/gui/join-us'},
+  {key:'OTX_KEY',        label:'AlienVault OTX',  hint:'otx.alienvault.com'},
+  {key:'HA_KEY',         label:'Hybrid Analysis', hint:'hybrid-analysis.com/signup'},
+  {key:'GREYNOISE_KEY',  label:'GreyNoise',       hint:'greynoise.io/plans/community'},
+  {key:'THREATFOX_KEY',  label:'ThreatFox',       hint:'threatfox.abuse.ch/api'},
+];
+
+function loadSettings() {
+  var grid = document.getElementById('settings-grid');
+  grid.innerHTML = '<div style="color:var(--text2);font-size:13px;">Loading...</div>';
+  fetch('/api/config').then(function(r){ return r.json(); }).then(function(data) {
+    var configured = data.keys_configured || [];
+    grid.innerHTML = API_KEYS.map(function(k) {
+      return '<div class="setting-row">'
+        + '<div><div style="display:flex;align-items:center;gap:8px;">'
+        + '<div class="key-status' + (configured.indexOf(k.key) >= 0 ? ' ok' : '') + '"></div>'
+        + '<label>' + k.label + '</label></div>'
+        + '<div class="hint">' + k.hint + '</div></div>'
+        + '<input type="password" id="key-' + k.key + '" placeholder="Enter API key (blank = keep current)" autocomplete="off"/>'
+        + '<button class="btn btn-secondary btn-sm" onclick="toggleShow(\'key-' + k.key + '\')">👁</button>'
+        + '</div>';
+    }).join('');
+  }).catch(function(e) {
+    grid.innerHTML = '<div class="alert error">Cannot reach server: ' + e.message + '</div>';
+  });
+}
+
+function toggleShow(id) {
+  var el = document.getElementById(id);
+  el.type = el.type === 'password' ? 'text' : 'password';
+}
+
+function saveSettings() {
+  var payload = {};
+  API_KEYS.forEach(function(k) {
+    var el = document.getElementById('key-' + k.key);
+    if (el) payload[k.key] = el.value.trim();
+  });
+  var alertEl = document.getElementById('settings-alert');
+  fetch('/api/config', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).then(function(res) {
+    return res.json().then(function(data) {
+      alertEl.style.display = 'block';
+      alertEl.className = 'alert ' + (res.ok ? 'success' : 'error');
+      alertEl.textContent = res.ok ? '✓ Configuration saved' : (data.error || 'Error');
+      setTimeout(function(){ alertEl.style.display = 'none'; }, 4000);
+      if (res.ok) loadSettings();
+    });
+  }).catch(function(e) {
+    alertEl.style.display = 'block';
+    alertEl.className = 'alert error';
+    alertEl.textContent = 'Connection error: ' + e.message;
+  });
+}
+
+// ── Helpers ───────────────────────────────────────────────────────
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Bulk verdict selection ────────────────────────────────────────
+function onRowCheckbox(cb) {
+  var row = cb.closest('tr');
+  if (cb.checked) row.classList.add('selected');
+  else row.classList.remove('selected');
+  updateBulkBar();
+}
+
+function toggleSelectAll(masterCb) {
+  document.querySelectorAll('.ip-select-cb').forEach(function(cb) {
+    cb.checked = masterCb.checked;
+    if (masterCb.checked) cb.closest('tr').classList.add('selected');
+    else cb.closest('tr').classList.remove('selected');
+  });
+  updateBulkBar();
+}
+
+function updateBulkBar() {
+  var checked  = document.querySelectorAll('.ip-select-cb:checked');
+  var bar      = document.getElementById('bulk-bar');
+  var countEl  = document.getElementById('bulk-count');
+  if (checked.length > 0) {
+    bar.classList.add('visible');
+    countEl.textContent = checked.length + ' IP' + (checked.length > 1 ? 's' : '');
+  } else {
+    bar.classList.remove('visible');
+  }
+  var all      = document.querySelectorAll('.ip-select-cb');
+  var masterCb = document.getElementById('select-all-cb');
+  if (masterCb) {
+    masterCb.checked       = all.length > 0 && checked.length === all.length;
+    masterCb.indeterminate = checked.length > 0 && checked.length < all.length;
+  }
+  updatePDFBtn();
+}
+
+function applyBulkVerdict() {
+  var sel     = document.getElementById('bulk-verdict-select');
+  var verdict = sel.value;
+  var checked = document.querySelectorAll('.ip-select-cb:checked');
+  if (!checked.length) return;
+  checked.forEach(function(cb) {
+    var ip = cb.dataset.ip;
+    if (verdict) manualVerdicts[ip] = verdict;
+    else delete manualVerdicts[ip];
+  });
+  sel.value = '';
+  clearSelection();
+  renderResults();
+}
+
+function clearSelection() {
+  document.querySelectorAll('.ip-select-cb').forEach(function(cb) {
+    cb.checked = false;
+    cb.closest('tr').classList.remove('selected');
+  });
+  var masterCb = document.getElementById('select-all-cb');
+  if (masterCb) { masterCb.checked = false; masterCb.indeterminate = false; }
+  var bar = document.getElementById('bulk-bar');
+  if (bar) bar.classList.remove('visible');
+}
+
+// ── Hash investigation ────────────────────────────────────────────
+var hashResults    = [];
+var hashFilter     = 'ALL';
+
+function getHashSources() {
+  return Array.from(document.querySelectorAll('#hash-sources-toggle input:checked'))
+    .map(function(cb){ return cb.closest('.src-toggle').dataset.src; });
+}
+
+function runHashInvestigation() {
+  var raw = document.getElementById('hash-input').value;
+  var hashes = raw.split(/[\n,]+/).map(function(s){ return s.trim(); }).filter(Boolean);
+  if (!hashes.length) { setStatus('Enter at least one hash', 'error'); return; }
+  if (hashes.length > 20) { setStatus('Max 20 hashes per request', 'error'); return; }
+
+  var activeSources = getHashSources();
+  if (!activeSources.length) { setStatus('Select at least one hash source', 'error'); return; }
+
+  var btn = document.getElementById('investigate-btn');
+  btn.disabled = true; btn.textContent = '⏳ Investigating...';
+  document.getElementById('loading').style.display = 'block';
+  document.getElementById('progress-fill').style.width = '0%';
+  document.getElementById('progress-count').textContent = '';
+  document.getElementById('progress-pct').textContent   = '';
+  document.getElementById('progress-ip').textContent    = '';
+  document.getElementById('loading-msg').textContent    = 'Querying hash intelligence sources...';
+  setStatus('');
+
+  var sessionResults = [];
+
+  fetch('/api/investigate/hash/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ hashes: hashes, active_sources: activeSources })
+  }).then(function(res) {
+    if (!res.ok) {
+      return res.json().then(function(err) {
+        setStatus(err.error || 'Hash investigation failed', 'error');
+        resetBtn(btn);
+      });
+    }
+    var reader  = res.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer  = '';
+
+    function read() {
+      return reader.read().then(function(chunk) {
+        if (chunk.done) { resetBtn(btn); return; }
+        buffer += decoder.decode(chunk.value, { stream: true });
+        var lines = buffer.split('\n');
+        buffer = lines.pop();
+        lines.forEach(function(line) {
+          if (!line.startsWith('data: ')) return;
+          var evt;
+          try { evt = JSON.parse(line.slice(6)); } catch(e) { return; }
+          if (evt.type === 'start') {
+            document.getElementById('loading-msg').textContent =
+              'Investigating ' + evt.total + ' hash' + (evt.total > 1 ? 'es' : '') + '...';
+            if (evt.invalid && evt.invalid.length)
+              setStatus('⚠ Skipped invalid: ' + evt.invalid.join(', '), 'warn');
+          } else if (evt.type === 'result') {
+            sessionResults.push(evt.result);
+            document.getElementById('progress-fill').style.width = evt.percent + '%';
+            document.getElementById('progress-count').textContent = evt.index + ' / ' + evt.total;
+            document.getElementById('progress-pct').textContent   = '(' + evt.percent + '%)';
+            document.getElementById('progress-ip').textContent    =
+              '✓ ' + evt.result.hash.slice(0,16) + '... → ' + evt.result.verdict;
+          } else if (evt.type === 'done') {
+            hashResults = hashResults.concat(sessionResults);
+            updateHashCount();
+            renderHashResults();
+            document.getElementById('loading').style.display = 'none';
+            // Auto-navigate to hash results
+            showPage('hash-results-page', document.querySelectorAll('nav button')[2]);
+            resetBtn(btn);
+          }
+        });
+        return read();
+      });
+    }
+    return read();
+  }).catch(function(e) {
+    setStatus('Connection error: ' + e.message, 'error');
+    document.getElementById('loading').style.display = 'none';
+    resetBtn(btn);
+  });
+}
+
+function hashVerdictColor(v) {
+  return v === 'MALICIOUS' ? 'var(--red)' : v === 'SUSPICIOUS' ? 'var(--yellow)' : 'var(--green)';
+}
+
+function hashRow(r) {
+  var uid  = 'hrow-' + r.hash.slice(0,8) + '-' + Date.now() + Math.random().toString(36).slice(2);
+  var fi   = r.file_info || {};
+  var vclass = r.verdict.replace(' ', '_');
+
+  var detailHtml = r.sources.map(function(s) {
+    var iocLines = (s.ioc || []).map(function(l){ return '<div class="ioc-line">' + esc(l) + '</div>'; }).join('');
+    var sign  = s.score > 0 ? '+' + s.score : s.score < 0 ? '' + s.score : '0';
+    var sc    = s.score >= 20 ? 'var(--red)' : s.score >= 10 ? 'var(--orange)' : s.score > 0 ? 'var(--yellow)' : 'var(--text2)';
+    var link  = s.url ? '<a class="src-link" href="' + esc(s.url) + '" target="_blank" rel="noopener">🔗 View on ' + esc(s.source) + ' ↗</a>' : '';
+    return '<div class="source-card">'
+      + '<h4>' + esc(s.source) + '<span style="color:' + sc + ';font-weight:600;">' + sign + ' pts</span></h4>'
+      + (s.error ? '<div class="err">⚠ ' + esc(s.error) + '</div>' : '')
+      + iocLines + link + '</div>';
+  }).join('');
+
+  return '<tr>'
+    + '<td><button class="expand-btn" onclick="toggleDetail(\'' + uid + '\')">▶</button></td>'
+    + '<td style="font-family:Consolas,monospace;font-size:11px;color:var(--cyan);">'
+    +   '<span title="' + esc(r.hash) + '">' + esc(r.hash.slice(0,20)) + '…</span>'
+    +   '<button onclick="copyHash(\'' + esc(r.hash) + '\',this)" style="background:none;border:none;cursor:pointer;color:var(--text2);font-size:11px;margin-left:4px;" title="Copy full hash">📋</button>'
+    + '</td>'
+    + '<td><span style="font-size:11px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;color:var(--text2);">' + esc(r.hash_type) + '</span></td>'
+    + '<td style="font-size:12px;color:var(--text2);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + esc(fi.name||'') + '">' + esc(fi.name || '—') + '</td>'
+    + '<td style="font-size:12px;color:var(--text2);">' + esc(fi.type || '—') + '</td>'
+    + '<td><div class="score-bar-wrap">'
+    +   '<div class="score-bar"><div class="score-bar-fill" style="width:' + r.score + '%;background:' + scoreColor(r.score) + ';"></div></div>'
+    +   '<span class="score-val" style="color:' + scoreColor(r.score) + ';">' + r.score + '</span>'
+    + '</div></td>'
+    + '<td><span class="verdict ' + vclass + '">' + r.verdict + '</span></td>'
+    + '<td style="color:var(--text2);font-size:12px;white-space:nowrap;">' + esc(r.timestamp) + '</td>'
+    + '</tr>'
+    + '<tr id="' + uid + '" class="detail-row"><td colspan="8"><div class="sources-grid">' + detailHtml + '</div></td></tr>';
+}
+
+function copyHash(hash, btn) {
+  navigator.clipboard.writeText(hash).then(function() {
+    btn.textContent = '✓';
+    setTimeout(function(){ btn.textContent = '📋'; }, 1500);
+  });
+}
+
+function renderHashResults() {
+  var cel = document.getElementById('hash-results-content');
+  var eel = document.getElementById('no-hash-results');
+  if (!hashResults.length) { cel.style.display='none'; eel.style.display='block'; return; }
+  cel.style.display='block'; eel.style.display='none';
+  var s = {
+    total:      hashResults.length,
+    malicious:  hashResults.filter(function(r){return r.verdict==='MALICIOUS';}).length,
+    suspicious: hashResults.filter(function(r){return r.verdict==='SUSPICIOUS';}).length,
+    clean:      hashResults.filter(function(r){return r.verdict==='CLEAN';}).length,
+  };
+  var sb = document.getElementById('hash-stats-bar');
+  sb.innerHTML = '';
+  [['','Total',s.total,'ALL'],['malicious','Malicious',s.malicious,'MALICIOUS'],
+   ['suspicious','Suspicious',s.suspicious,'SUSPICIOUS'],['clean','Clean',s.clean,'CLEAN']
+  ].forEach(function(it){
+    var d=document.createElement('div');
+    d.className='stat-card '+it[0]; d.style.cursor='pointer';
+    (function(v){ d.onclick=function(){ setHashFilter(v,null); }; })(it[3]);
+    d.innerHTML='<div class="val">'+it[2]+'</div><div class="lbl">'+it[1]+'</div>';
+    sb.appendChild(d);
+  });
+  var filtered = hashFilter==='ALL' ? hashResults
+    : hashResults.filter(function(r){ return r.verdict===hashFilter; });
+  document.getElementById('hash-results-tbody').innerHTML = filtered.length
+    ? filtered.map(hashRow).join('')
+    : '<tr><td colspan="8" style="text-align:center;color:var(--text2);padding:30px;">No results match filter</td></tr>';
+}
+
+function setHashFilter(v, btn) {
+  hashFilter = v;
+  document.querySelectorAll('#hash-verdict-filter .filter-btn').forEach(function(b){ b.classList.remove('active'); });
+  if (btn) btn.classList.add('active');
+  else {
+    document.querySelectorAll('#hash-verdict-filter .filter-btn').forEach(function(b){
+      if (b.textContent.trim().toUpperCase() === v || (v==='ALL' && b.textContent.trim()==='All'))
+        b.classList.add('active');
+    });
+  }
+  renderHashResults();
+}
+
+function updateHashCount() {
+  var el = document.getElementById('hash-count');
+  if (!el) return;
+  if (hashResults.length) { el.style.display='inline'; el.textContent=hashResults.length; }
+}
+
+function exportHashJSON() {
+  download(new Blob([JSON.stringify(hashResults,null,2)],{type:'application/json'}), 'hash_report_'+ts()+'.json');
+}
+
+function clearHashResults() {
+  hashResults=[]; hashFilter='ALL';
+  var el=document.getElementById('hash-count');
+  if(el) el.style.display='none';
+  document.querySelectorAll('#hash-verdict-filter .filter-btn').forEach(function(b){ b.classList.remove('active'); });
+  var first=document.querySelector('#hash-verdict-filter .filter-btn');
+  if(first) first.classList.add('active');
+  renderHashResults();
+}
+
+function renderInlineHashResults(results) {
+  var container=document.getElementById('inline-hash-results');
+  if(!container){
+    container=document.createElement('div');
+    container.id='inline-hash-results';
+    var ir=document.getElementById('inline-results');
+    if(ir && ir.parentNode) ir.parentNode.insertBefore(container, ir.nextSibling);
+    else {
+      var inv=document.getElementById('investigate');
+      if(inv) inv.appendChild(container);
+    }
+  }
+  if(!results || !results.length){ container.style.display='none'; return; }
+  container.style.display='block';
+  var rows=results.map(function(r){
+    var vclass=r.verdict.replace(' ','_');
+    var hashShort=(r.hash||'').slice(0,16)+'...';
+    return '<tr>'
+      +'<td style="font-family:monospace;font-size:11px;color:var(--purple);" title="'+(r.hash||'')+'">'+hashShort
+      +'<button class="btn btn-secondary btn-sm copy-hash-btn" data-h="'+(r.hash||'')+'" style="padding:1px 6px;font-size:10px;margin-left:4px;">&#128203;</button></td>'
+      +'<td style="font-size:11px;color:var(--text2);">'+(r.hash_type||'')+'</td>'
+      +'<td style="font-size:11px;color:var(--text2);">'+(r.file_name||'–')+'</td>'
+      +'<td><span class="score-val" style="color:'+scoreColor(r.score)+';">'+r.score+'</span></td>'
+      +'<td><span class="verdict '+vclass+'">'+r.verdict+'</span></td>'
+      +'</tr>';
+  }).join('');
+  container.innerHTML='<div class="card" style="border-color:var(--purple);margin-top:0;">'
+    +'<h2 style="color:var(--purple);">Hash Results — '+results.length+' hash'+(results.length>1?'es':'')+'</h2>'
+    +'<div style="overflow-x:auto;"><table>'
+    +'<thead><tr><th>Hash</th><th>Type</th><th>File Name</th><th>Score</th><th>Verdict</th></tr></thead>'
+    +'<tbody>'+rows+'</tbody></table></div>'
+    +'<div style="margin-top:10px;">'
+    +'<button class="btn btn-secondary btn-sm" onclick="showPage(\'hash-results-page\',document.querySelectorAll(\'nav button\')[2])">View All Hash Results →</button>'
+    +'</div></div>';
+}
+
+function goToHashResults() {
+  showPage('hash-results-page', document.querySelectorAll('nav button')[2]);
+}
+
+// ── Traffic Analysis ────────────────────────────────────────────
+function handleTrafficDrop(e) {
+  e.preventDefault();
+  document.getElementById('traffic-drop-zone').classList.remove('drag');
+  var file = e.dataTransfer.files[0];
+  if (file) handleTrafficFile(file);
+}
+
+function handleTrafficFile(file) {
+  if (!file) return;
+  var status = document.getElementById('traffic-upload-status');
+  status.style.display = 'block';
+  status.textContent = 'Analyzing ' + file.name + ' (' + (file.size/1024).toFixed(1) + ' KB)...';
+  var fd = new FormData();
+  fd.append('csv', file);
+  fetch('/api/analyze/traffic', { method:'POST', body: fd })
+    .then(function(res){ return res.json(); })
+    .then(function(data){
+      if (data.error) { status.style.color='var(--red)'; status.textContent='Error: '+data.error; return; }
+      status.style.display='none';
+      renderTrafficResults(data);
+    })
+    .catch(function(e){ status.style.color='var(--red)'; status.textContent='Request failed: '+e.message; });
+}
+
+function renderTrafficResults(d) {
+  trafficAnalysisData = d;  // store for PDF export
+  document.getElementById('traffic-upload-card').style.display = 'none';
+  var res = document.getElementById('traffic-results');
+  res.style.display = 'block';
+
+  // Verdict banner
+  var bannerEl = document.getElementById('tv-banner');
+  bannerEl.className = 'verdict-banner ' + (d.verdict==='ATTACK'?'attack': d.verdict==='SUSPICIOUS'?'suspicious':'clean');
+  document.getElementById('tv-icon').textContent  = d.verdict==='ATTACK'?'🚨': d.verdict==='SUSPICIOUS'?'⚠️':'✅';
+  document.getElementById('tv-label').textContent = d.verdict + ' — Confidence: ' + d.confidence;
+  document.getElementById('tv-sub').textContent   = d.indicators.length + ' indicator(s) detected  |  Attack score: ' + d.attack_score + '/100';
+  document.getElementById('tv-score').textContent = 'Score: ' + d.attack_score;
+  // Store base values directly from backend — used by recalcTrafficScore()
+  trafficBaseScore      = d.attack_score;
+  trafficBaseIndicators = d.indicators.length;
+
+  // Indicators
+  var indHtml = d.indicators.length ? d.indicators.map(function(ind){
+    return '<div class="indicator '+ind.severity+'">'
+      +'<div class="ind-title">'+ind.severity+' — '+ind.type.replace(/_/g,' ')+'</div>'
+      +'<div class="ind-detail">'+esc(ind.detail)+'</div>'
+      +'</div>';
+  }).join('') : '<div style="color:var(--green);font-size:13px;">No suspicious indicators found.</div>';
+  document.getElementById('tv-indicators').innerHTML = indHtml;
+
+  // Summary meta cards
+  var s = d.summary;
+  var dur = s.duration_seconds >= 60
+    ? Math.floor(s.duration_seconds/60)+'m '+( s.duration_seconds%60)+'s'
+    : s.duration_seconds+'s';
+  var metas = [
+    {v: s.total_flows.toLocaleString(),       l:'Total Flows'},
+    {v: s.total_bytes_fmt,                    l:'Total Bytes'},
+    {v: s.total_packets_fmt,                  l:'Total Packets'},
+    {v: s.unique_sources,                     l:'Unique Sources'},
+    {v: dur,                                  l:'Duration'},
+    {v: s.cdn_ratio+'%',                      l:'CDN Traffic'},
+  ];
+  document.getElementById('tv-meta').innerHTML = metas.map(function(m){
+    return '<div class="meta-card"><div class="mv">'+m.v+'</div><div class="ml">'+m.l+'</div></div>';
+  }).join('');
+
+  // Protocol dist
+  document.getElementById('tv-proto').innerHTML = Object.keys(d.protocol_dist).map(function(k){
+    var c = k==='TCP'?'var(--cyan)':k==='UDP'?'var(--yellow)':'var(--text2)';
+    return '<span class="port-pill" style="border-color:'+c+';color:'+c+';">'+k+': '+d.protocol_dist[k]+'</span>';
+  }).join('');
+
+  // Flag dist
+  document.getElementById('tv-flags').innerHTML = Object.keys(d.flag_dist).map(function(k){
+    var c = k==='PSH+ACK'?'var(--orange)':k==='SYN'?'var(--red)':k==='ACK'?'var(--cyan)':'var(--text2)';
+    return '<span class="port-pill" style="border-color:'+c+';color:'+c+';">'+k+': '+d.flag_dist[k]+'</span>';
+  }).join('');
+
+  // Targeted IPs
+  document.getElementById('tv-dst-ips').innerHTML = d.targets.ips.map(function(t){
+    return '<div style="font-family:monospace;font-size:14px;font-weight:600;color:var(--cyan);margin-bottom:4px;">'
+      +esc(t.ip)+'<span style="font-size:11px;color:var(--text2);font-weight:400;margin-left:8px;">'+t.flows+' flows</span></div>';
+  }).join('');
+
+  // Destination ports
+  var wellKnown = new Set([80,443,8080,8443,53,853]);
+  document.getElementById('tv-dst-ports').innerHTML = d.targets.ports.map(function(p){
+    var cls = wellKnown.has(p.port)?'well-known':'suspicious';
+    var label = p.name ? ' ('+p.name+')' : '';
+    return '<span class="port-pill '+cls+'">'+p.port+label+': '+p.flows+'</span>';
+  }).join('');
+
+  // Top 10 by bytes
+  var totalBytes = d.summary.total_bytes;
+  document.querySelector('#tv-top-bytes tbody').innerHTML = d.top10_bytes.map(function(row,i){
+    var pct = totalBytes ? (row.bytes/totalBytes*100).toFixed(1) : 0;
+    var cdnTag = row.cdn ? '<span class="cdn-tag">'+esc(row.cdn)+'</span>' : '';
+    return '<tr><td style="color:var(--text2);">'+(i+1)+'</td>'
+      +'<td style="font-family:monospace;font-size:12px;">'+esc(row.ip)+cdnTag+'</td>'
+      +'<td style="color:var(--red);font-weight:600;">'+row.bytes_fmt+'</td>'
+      +'<td style="color:var(--text2);">'+row.packets_fmt+'</td>'
+      +'<td><div style="display:flex;align-items:center;gap:6px;">'
+      +'<div class="top-bar" style="width:60px;"><div class="top-bar-fill" style="width:'+Math.min(pct,100)+'%;background:var(--red);"></div></div>'
+      +'<span style="font-size:11px;color:var(--text2);">'+pct+'%</span>'
+      +'</div></td></tr>';
+  }).join('');
+
+  // Top 10 by packets
+  var totalPkts = d.summary.total_packets;
+  document.querySelector('#tv-top-pkts tbody').innerHTML = d.top10_packets.map(function(row,i){
+    var pct = totalPkts ? (row.packets/totalPkts*100).toFixed(1) : 0;
+    var cdnTag = row.cdn ? '<span class="cdn-tag">'+esc(row.cdn)+'</span>' : '';
+    return '<tr><td style="color:var(--text2);">'+(i+1)+'</td>'
+      +'<td style="font-family:monospace;font-size:12px;">'+esc(row.ip)+cdnTag+'</td>'
+      +'<td style="color:var(--orange);font-weight:600;">'+row.packets_fmt+'</td>'
+      +'<td style="color:var(--text2);">'+row.bytes_fmt+'</td>'
+      +'<td><div style="display:flex;align-items:center;gap:6px;">'
+      +'<div class="top-bar" style="width:60px;"><div class="top-bar-fill" style="width:'+Math.min(pct,100)+'%;background:var(--orange);"></div></div>'
+      +'<span style="font-size:11px;color:var(--text2);">'+pct+'%</span>'
+      +'</div></td></tr>';
+  }).join('');
+
+  // Packet size distribution chart
+  if (d.pkt_size_dist) {
+    var psd     = d.pkt_size_dist;
+    var labels  = psd.labels;           // ordered bottom→top: ['0-150','151-300',...,'1500+']
+    var data    = psd.data;
+
+    // Chart geometry
+    var marginL = 82, marginR = 48, marginT = 14, marginB = 30;
+    var barH    = 18, barGap = 6;
+    var chartH  = labels.length * (barH + barGap) - barGap;
+    var svgH    = chartH + marginT + marginB;
+    var svgW    = 540;
+    var chartW  = svgW - marginL - marginR;
+
+    var maxCount = Math.max.apply(null, labels.map(function(k){ return data[k].count; })) || 1;
+
+    // Nice X-axis ticks
+    function niceTick(max) {
+      var mag = Math.pow(10, Math.floor(Math.log10(max)));
+      var norm = max / mag;
+      var step = norm <= 1.5 ? 0.2 : norm <= 3 ? 0.5 : norm <= 7 ? 1 : 2;
+      return step * mag;
+    }
+    var tick  = niceTick(maxCount);
+    var xMax  = Math.ceil(maxCount / tick) * tick;
+    var ticks = [];
+    for (var t = 0; t <= xMax; t += tick) ticks.push(t);
+
+    function fmtCount(n) {
+      if (n >= 1000000) return (n/1000000).toFixed(n%1000000===0?0:1) + 'M';
+      if (n >= 1000)    return (n/1000).toFixed(n%1000===0?0:1) + 'K';
+      return String(n);
+    }
+    function xPos(n) { return marginL + (n / xMax) * chartW; }
+
+    var svgParts = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 '+svgW+' '+svgH+'" style="width:100%;font-family:monospace;">'];
+
+    // Grid lines + x-axis labels
+    ticks.forEach(function(t) {
+      var x = xPos(t);
+      svgParts.push('<line x1="'+x+'" y1="'+marginT+'" x2="'+x+'" y2="'+(marginT+chartH)+'" stroke="#30363d" stroke-width="1"/>');
+      svgParts.push('<text x="'+x+'" y="'+(marginT+chartH+16)+'" fill="#8b949e" font-size="10" text-anchor="middle">'+fmtCount(t)+'</text>');
+    });
+
+    // Bars (bottom label = index 0, drawn at bottom of chart)
+    labels.forEach(function(k, i) {
+      var cnt  = data[k].count;
+      var barW = cnt > 0 ? Math.max((cnt / xMax) * chartW, 2) : 0;
+      // Render bottom-to-top: index 0 at bottom
+      var y = marginT + (labels.length - 1 - i) * (barH + barGap);
+      // Bar
+      svgParts.push('<rect x="'+marginL+'" y="'+y+'" width="'+barW+'" height="'+barH+'" fill="#f0883e" rx="2"/>');
+      // Y label
+      svgParts.push('<text x="'+(marginL-6)+'" y="'+(y + barH/2 + 4)+'" fill="#8b949e" font-size="10" text-anchor="end">'+k+'</text>');
+      // Count label at end of bar
+      if (cnt > 0) {
+        svgParts.push('<text x="'+(marginL+barW+4)+'" y="'+(y+barH/2+4)+'" fill="#e6edf3" font-size="10">'+fmtCount(cnt)+'</text>');
+      }
+    });
+
+    // X-axis baseline
+    svgParts.push('<line x1="'+marginL+'" y1="'+(marginT+chartH)+'" x2="'+(marginL+chartW)+'" y2="'+(marginT+chartH)+'" stroke="#30363d" stroke-width="1"/>');
+
+    svgParts.push('</svg>');
+
+    // Contextual note
+    var topBucket = labels.slice().sort(function(a,b){ return data[b].count - data[a].count; })[0];
+    var topPct    = data[topBucket].pct;
+    var psdNote   = '';
+    if ((topBucket === '0-150') && topPct > 60) {
+      psdNote = '⚠️ ' + topPct + '% of flows have avg packet size 0–150 B — characteristic of SYN/UDP/ACK flood (small, high-rate packets).';
+    } else if ((topBucket === '1351-1500' || topBucket === '1500+') && topPct > 40) {
+      psdNote = '⚠️ ' + topPct + '% of flows show large avg packet size — may indicate amplification/reflection attack (DNS/NTP/SSDP).';
+    } else if ((topBucket === '601-750' || topBucket === '751-900' || topBucket === '901-1050' || topBucket === '1051-1200') && topPct > 50) {
+      psdNote = 'ℹ️ Dominant traffic in ' + topBucket + ' B range — consistent with normal HTTP/HTTPS or mixed application traffic.';
+    } else {
+      psdNote = 'ℹ️ Mixed packet size distribution — no single dominant pattern detected.';
+    }
+
+    document.getElementById('tv-psd-chart').innerHTML =
+      svgParts.join('')
+      + '<div style="margin-top:10px;padding:8px 10px;background:rgba(139,148,158,.08);border-radius:6px;font-size:11px;color:var(--text2);line-height:1.6;">'
+      + esc(psdNote) + '</div>';
+  }
+
+
+  // Update "All unique IPs" label with actual count
+  var invPool = d.all_sources_bytes || d.top10_bytes;
+  var allLabel = document.getElementById('tv-inv-all-label');
+  if (allLabel) allLabel.textContent = 'All unique IPs (' + invPool.length + ')';
+
+  // Auto-investigate: use current mode selection (default Top 10)
+  var isAll = document.getElementById('tv-inv-mode-all') && document.getElementById('tv-inv-mode-all').checked;
+  var ipsToInv;
+  if (isAll) {
+    ipsToInv = invPool.map(function(r){ return r.ip; });
+  } else {
+    var invCount = parseInt(document.getElementById('tv-inv-count').value, 10) || 10;
+    invCount = Math.max(1, Math.min(invCount, invPool.length));
+    ipsToInv = invPool.slice(0, invCount).map(function(r){ return r.ip; });
+  }
+  // Build top-10 set for badge display
+  trafficInvTop10Set = {};
+  (d.all_sources_bytes || d.top10_bytes || []).slice(0,10).forEach(function(r){ trafficInvTop10Set[r.ip] = true; });
+
+  startAutoInvestigation(ipsToInv);
+}
+
+function resetTrafficAnalysis() {
+  document.getElementById('traffic-upload-card').style.display = 'block';
+  document.getElementById('traffic-results').style.display = 'none';
+  document.getElementById('traffic-upload-status').style.display = 'none';
+  document.getElementById('traffic-csv-input').value = '';
+  document.getElementById('tv-auto-inv').style.display = 'none';
+  document.getElementById('tv-inv-results').innerHTML = '';
+  document.getElementById('tv-inv-bar-fill').style.width = '0%';
+  document.getElementById('tv-inv-stats').style.display = 'none';
+  document.getElementById('tv-inv-filter-panel').style.display = 'none';
+  document.getElementById('tv-inv-bulk-bar').classList.remove('visible');
+  trafficAnalysisData       = null;
+  trafficInvAllResults      = [];
+  trafficInvManualVerdicts  = {};
+  trafficInvSelected        = {};
+  trafficInvVerdictFilter   = 'ALL';
+  trafficInvScoreMin        = 0;
+  trafficInvScoreMax        = 100;
+  // Reset filter UI
+  document.querySelectorAll('#tv-inv-verdict-filter-group .filter-btn').forEach(function(b,i){ b.classList.toggle('active', i===0); });
+  var smin = document.getElementById('tv-inv-score-min'); if(smin) smin.value = 0;
+  var smax = document.getElementById('tv-inv-score-max'); if(smax) smax.value = 100;
+  var lbl  = document.getElementById('tv-inv-score-label'); if(lbl) lbl.textContent = '0 – 100';
+  var fill = document.getElementById('tv-inv-range-fill'); if(fill){ fill.style.left='0%'; fill.style.width='100%'; }
+}
+
+function exportTrafficPDF() {
+  if (!trafficAnalysisData) { alert('No traffic analysis data available.'); return; }
+  var btn    = document.getElementById('tv-export-pdf-btn');
+  var status = document.getElementById('tv-pdf-status');
+  btn.disabled = true;
+  btn.textContent = '⏳ Generating…';
+  status.style.color = 'var(--text2)';
+  status.textContent = '';
+
+  // If IPs are selected (via checkboxes), export only those; otherwise export all
+  var selectedIPs = Object.keys(trafficInvSelected);
+  var invToExport = selectedIPs.length > 0
+    ? trafficInvAllResults.filter(function(r){ return trafficInvSelected[r.ip]; })
+    : trafficInvAllResults;
+
+  // Read the current effective score/verdict from the dashboard (includes IP reputation bonus)
+  var effectiveScoreEl = document.getElementById('tv-score');
+  var effectiveLabelEl = document.getElementById('tv-label');
+  var effectiveScore   = effectiveScoreEl ? parseInt((effectiveScoreEl.textContent||'').replace('Score:','').trim())||0 : trafficBaseScore;
+  var bannerEl         = document.getElementById('tv-banner');
+  var effectiveVerdict = bannerEl && bannerEl.classList.contains('attack') ? 'ATTACK'
+                       : bannerEl && bannerEl.classList.contains('suspicious') ? 'SUSPICIOUS' : 'NORMAL';
+  var payload = {
+    traffic:          trafficAnalysisData,
+    investigation:    invToExport,
+    manual_verdicts:  trafficInvManualVerdicts,
+    override_score:   effectiveScore,
+    override_verdict: effectiveVerdict
+  };
+
+  fetch('/api/export/traffic/pdf', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  }).then(function(res) {
+    if (!res.ok) return res.json().then(function(e){ throw new Error(e.error||'PDF failed'); });
+    return res.blob();
+  }).then(function(blob) {
+    var url  = URL.createObjectURL(blob);
+    var a    = document.createElement('a');
+    a.href   = url;
+    a.download = 'traffic_report_' + new Date().toISOString().slice(0,19).replace(/[:T]/g,'') + '.pdf';
+    a.click();
+    URL.revokeObjectURL(url);
+    btn.textContent  = '📄 Export Traffic PDF';
+    btn.disabled     = false;
+    status.textContent = '✓ Downloaded';
+    setTimeout(function(){ status.textContent = ''; }, 3000);
+  }).catch(function(e) {
+    btn.textContent  = '📄 Export Traffic PDF';
+    btn.disabled     = false;
+    status.style.color = 'var(--red)';
+    status.textContent = 'Error: ' + e.message;
+  });
+}
+
+function updateInvModeUI() {
+  var isAll = document.getElementById('tv-inv-mode-all').checked;
+  document.getElementById('tv-inv-count').disabled = isAll;
+  document.getElementById('tv-inv-count').style.opacity = isAll ? '0.4' : '1';
+}
+
+function rerunAutoInvestigation() {
+  if (!trafficAnalysisData) return;
+  var pool = trafficAnalysisData.all_sources_bytes || trafficAnalysisData.top10_bytes || [];
+  if (!pool.length) return;
+  var isAll = document.getElementById('tv-inv-mode-all').checked;
+  var ips;
+  if (isAll) {
+    ips = pool.map(function(r){ return r.ip; });
+  } else {
+    var invCount = parseInt(document.getElementById('tv-inv-count').value, 10) || 10;
+    invCount = Math.max(1, Math.min(invCount, pool.length));
+    ips = pool.slice(0, invCount).map(function(r){ return r.ip; });
+  }
+  // Abort any in-progress investigation
+  if (trafficInvAbortController) { trafficInvAbortController.abort(); trafficInvAbortController = null; }
+  // Reset state for fresh run
+  trafficInvAllResults     = [];
+  trafficBaseScore         = 0;
+  trafficBaseIndicators    = 0;
+  trafficInvManualVerdicts = {};
+  trafficInvSelected       = {};
+  trafficInvVerdictFilter  = 'ALL';
+  trafficInvSearchQuery    = '';
+  trafficInvTop10Filter    = false;
+  // Build top-10 set from data (first 10 of all_sources_bytes which is sorted by bytes desc)
+  var top10list = (trafficAnalysisData.all_sources_bytes || trafficAnalysisData.top10_bytes || []).slice(0,10);
+  trafficInvTop10Set = {};
+  top10list.forEach(function(r){ trafficInvTop10Set[r.ip] = true; });
+  document.getElementById('tv-inv-results').innerHTML = '';
+  document.getElementById('tv-inv-stats').style.display = 'none';
+  document.getElementById('tv-inv-filter-panel').style.display = 'none';
+  document.getElementById('tv-inv-bulk-bar').classList.remove('visible');
+  document.querySelectorAll('#tv-inv-verdict-filter-group .filter-btn').forEach(function(b,i){ b.classList.toggle('active', i===0); });
+  var srch = document.getElementById('tv-inv-ip-search'); if (srch) srch.value = '';
+  var t10btn = document.getElementById('tv-inv-top10-btn'); if(t10btn) t10btn.classList.remove('active');
+  startAutoInvestigation(ips);
+}
+
+function setRunBtn(running) {
+  var btn = document.getElementById('tv-inv-run-btn');
+  if (!btn) return;
+  if (running) {
+    btn.textContent = '⏸ Pause';
+    btn.onclick = function() {
+      if (trafficInvAbortController) { trafficInvAbortController.abort(); trafficInvAbortController = null; }
+      setRunBtn(false);
+      var status = document.getElementById('tv-inv-status');
+      if (status) { status.style.color = 'var(--yellow)'; status.textContent = 'Investigation paused.'; }
+      var bar = document.getElementById('tv-inv-progress-bar');
+      if (bar) bar.style.display = 'none';
+      if (trafficInvAllResults.length) renderTrafficInvResults(trafficInvAllResults);
+    };
+  } else {
+    btn.textContent = '▶ Run';
+    btn.onclick = rerunAutoInvestigation;
+  }
+}
+
+function startAutoInvestigation(ips) {
+  if (!ips || !ips.length) return;
+  var invDiv  = document.getElementById('tv-auto-inv');
+  var status  = document.getElementById('tv-inv-status');
+  var bar     = document.getElementById('tv-inv-progress-bar');
+  var barFill = document.getElementById('tv-inv-bar-fill');
+  var resDiv  = document.getElementById('tv-inv-results');
+  var viewBtn = document.getElementById('tv-inv-view-btn');
+  invDiv.style.display = 'block';
+  status.style.color   = 'var(--text2)';
+  status.textContent   = 'Investigating ' + ips.length + ' source IPs using AbuseIPDB · VirusTotal · AlienVault OTX…';
+  bar.style.display    = 'block';
+  barFill.style.width  = '0%';
+  resDiv.innerHTML     = '';
+  if (viewBtn) viewBtn.style.display = 'none';
+  var done = 0, total = ips.length;
+  var invResults = [];
+  trafficInvAbortController = new AbortController();
+  setRunBtn(true);
+
+  fetch('/api/investigate/stream', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ ips: ips, active_sources: ['abuseipdb', 'virustotal', 'otx', 'ipapi'] }),
+    signal: trafficInvAbortController ? trafficInvAbortController.signal : undefined
+  }).then(function(res) {
+    if (!res.ok) {
+      res.text().then(function(t){ status.style.color='var(--red)'; status.textContent='Investigation failed: '+t.slice(0,80); });
+      setRunBtn(false);
+      return;
+    }
+    var reader = res.body.getReader(), decoder = new TextDecoder(), buf = '';
+    function read() {
+      return reader.read().then(function(chunk) {
+        if (chunk.done) {
+          trafficInvAbortController = null;
+          setRunBtn(false);
+          status.style.color   = 'var(--green)';
+          status.textContent   = '✓ Investigation complete — ' + total + ' IPs analysed.';
+          bar.style.display    = 'none';
+          renderTrafficInvResults(invResults);
+          return;
+        }
+        buf += decoder.decode(chunk.value, {stream:true});
+        var lines = buf.split('\n'); buf = lines.pop();
+        lines.forEach(function(line) {
+          if (!line.startsWith('data: ')) return;
+          var evt; try { evt = JSON.parse(line.slice(6)); } catch(e) { return; }
+          if (evt.type === 'result') {
+            invResults.push(evt.result);
+            trafficInvAllResults = invResults.slice();
+            done++;
+            barFill.style.width = Math.round(done / total * 100) + '%';
+            status.textContent  = 'Checked ' + done + ' / ' + total + ' IPs…';
+          }
+        });
+        return read();
+      });
+    }
+    return read();
+  }).catch(function(e) {
+    if (e.name === 'AbortError') return; // user paused
+    status.style.color = 'var(--red)';
+    status.textContent = 'Error: ' + e.message;
+    setRunBtn(false);
+  });
+}
+
+// ── Traffic inv filter helpers ────────────────────────────────────
+function toggleTrafficInvTop10Filter(btn) {
+  trafficInvTop10Filter = !trafficInvTop10Filter;
+  btn.classList.toggle('active', trafficInvTop10Filter);
+  renderTrafficInvResults(trafficInvAllResults);
+}
+
+function onTrafficInvSearch() {
+  trafficInvSearchQuery = (document.getElementById('tv-inv-ip-search').value || '').trim().toLowerCase();
+  renderTrafficInvResults(trafficInvAllResults);
+}
+
+function setTrafficInvVerdictFilter(v, btn) {
+  trafficInvVerdictFilter = v;
+  document.querySelectorAll('#tv-inv-verdict-filter-group .filter-btn').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+  renderTrafficInvResults(trafficInvAllResults);
+}
+
+function onTrafficInvRangeChange() {
+  var minEl = document.getElementById('tv-inv-score-min');
+  var maxEl = document.getElementById('tv-inv-score-max');
+  trafficInvScoreMin = parseInt(minEl.value);
+  trafficInvScoreMax = parseInt(maxEl.value);
+  if (trafficInvScoreMin > trafficInvScoreMax) {
+    if (document.activeElement === minEl) { trafficInvScoreMax = trafficInvScoreMin; maxEl.value = trafficInvScoreMax; }
+    else { trafficInvScoreMin = trafficInvScoreMax; minEl.value = trafficInvScoreMin; }
+  }
+  document.getElementById('tv-inv-score-label').textContent = trafficInvScoreMin + ' – ' + trafficInvScoreMax;
+  var fill = document.getElementById('tv-inv-range-fill');
+  fill.style.left  = trafficInvScoreMin + '%';
+  fill.style.width = (trafficInvScoreMax - trafficInvScoreMin) + '%';
+  renderTrafficInvResults(trafficInvAllResults);
+}
+
+function onTrafficInvRowCheckbox(cb) {
+  var ip = cb.dataset.ip;
+  if (cb.checked) trafficInvSelected[ip] = true;
+  else delete trafficInvSelected[ip];
+  updateTrafficInvBulkBar();
+  // sync master checkbox state
+  var all = document.querySelectorAll('.tv-inv-row-cb');
+  var master = document.getElementById('tv-inv-select-all-cb');
+  if (!master) return;
+  var checked = Array.from(all).filter(function(c){ return c.checked; }).length;
+  master.indeterminate = checked > 0 && checked < all.length;
+  master.checked = checked === all.length;
+}
+
+function toggleTrafficInvSelectAll(cb) {
+  document.querySelectorAll('.tv-inv-row-cb').forEach(function(c){
+    c.checked = cb.checked;
+    var ip = c.dataset.ip;
+    if (cb.checked) trafficInvSelected[ip] = true;
+    else delete trafficInvSelected[ip];
+  });
+  updateTrafficInvBulkBar();
+}
+
+function updateTrafficInvBulkBar() {
+  var bar   = document.getElementById('tv-inv-bulk-bar');
+  var count = document.getElementById('tv-inv-bulk-count');
+  var n = Object.keys(trafficInvSelected).length;
+  if (n > 0) { bar.classList.add('visible'); count.textContent = n; }
+  else        { bar.classList.remove('visible'); }
+}
+
+function clearTrafficInvSelection() {
+  trafficInvSelected = {};
+  document.querySelectorAll('.tv-inv-row-cb').forEach(function(c){ c.checked = false; });
+  var master = document.getElementById('tv-inv-select-all-cb');
+  if (master) { master.checked = false; master.indeterminate = false; }
+  updateTrafficInvBulkBar();
+}
+
+function renderTrafficInvResults(results) {
+  if (!results || !results.length) { document.getElementById('tv-inv-results').textContent = 'No results.'; return; }
+  var _vOrd = {MALICIOUS:4,'HIGH RISK':3,SUSPICIOUS:2,CLEAN:1};
+  var scoreEl = document.getElementById('tv-score');
+  var subEl   = document.getElementById('tv-sub');
+  trafficInvAllResults = results;
+  results.forEach(function(r){
+    var ex = allResults.findIndex(function(x){ return x.ip===r.ip; });
+    if (ex>=0) allResults[ex]=r; else allResults.push(r);
+  });
+
+  // Stats bar
+  var statsWrap = document.getElementById('tv-inv-stats');
+  var statsBar  = document.getElementById('tv-inv-stats-bar');
+  statsWrap.style.display = 'block';
+  var counts = {MALICIOUS:0,'HIGH RISK':0,SUSPICIOUS:0,CLEAN:0};
+  results.forEach(function(r){ var v=trafficInvManualVerdicts[r.ip]||r.verdict; if(counts[v]!==undefined) counts[v]++; });
+  statsBar.innerHTML =
+    statCard(results.length,'Total','','ALL') +
+    statCard(counts.MALICIOUS,'Malicious','malicious','MALICIOUS') +
+    statCard(counts['HIGH RISK'],'High Risk','high_risk','HIGH RISK') +
+    statCard(counts.SUSPICIOUS,'Suspicious','suspicious','SUSPICIOUS') +
+    statCard(counts.CLEAN,'Clean','clean','CLEAN');
+  statsBar.querySelectorAll('.stat-card').forEach(function(card) {
+    var m = (card.getAttribute('onclick')||'').match(/setInlineFilter\('([^']+)'\)/);
+    var fv = m ? m[1] : 'ALL';
+    card.onclick = function(){
+      var btn = document.querySelector('#tv-inv-verdict-filter-group .filter-btn[onclick*="\''+fv+'\'"]')
+             || document.querySelector('#tv-inv-verdict-filter-group .filter-btn');
+      setTrafficInvVerdictFilter(fv, btn);
+    };
+  });
+
+  document.getElementById('tv-inv-filter-panel').style.display = 'block';
+
+  var sorted = results.slice().sort(function(a,b){
+    var va=trafficInvManualVerdicts[a.ip]||a.verdict, vb=trafficInvManualVerdicts[b.ip]||b.verdict;
+    var oa=_vOrd[va]||0, ob=_vOrd[vb]||0;
+    if (ob!==oa) return ob-oa;
+    return (b.score||0)-(a.score||0);
+  });
+  var filtered = sorted.filter(function(r){
+    var effV=trafficInvManualVerdicts[r.ip]||r.verdict;
+    if (trafficInvVerdictFilter!=='ALL' && effV!==trafficInvVerdictFilter) return false;
+    if (r.score<trafficInvScoreMin||r.score>trafficInvScoreMax) return false;
+    if (trafficInvSearchQuery && r.ip.toLowerCase().indexOf(trafficInvSearchQuery)<0) return false;
+    if (trafficInvTop10Filter && !trafficInvTop10Set[r.ip]) return false;
+    return true;
+  });
+
+  var verdictOpts = ['MALICIOUS','HIGH RISK','SUSPICIOUS','CLEAN'];
+  var srcDefs = [
+    {key:'AbuseIPDB',color:'var(--cyan)',label:'AbuseIPDB'},
+    {key:'VirusTotal',color:'#bc8cff',label:'VT'},
+    {key:'AlienVault OTX',color:'var(--yellow)',label:'OTX'},
+    {key:'ip-api',color:'var(--green)',label:'ip-api'}
+  ];
+  var allC = filtered.length>0 && filtered.every(function(r){ return trafficInvSelected[r.ip]; });
+  var anyC = filtered.some(function(r){ return trafficInvSelected[r.ip]; });
+
+  var html = '<div style="overflow-x:auto;"><table><thead><tr>'
+    +'<th><input type="checkbox" class="row-cb" id="tv-inv-select-all-cb"'+(allC?' checked':'')
+    +' onclick="toggleTrafficInvSelectAll(this)" title="Select all visible"></th>'
+    +'<th>#</th><th>Source IP</th><th>Verdict</th><th style="min-width:120px;">Override</th>'
+    +'<th>Score</th><th style="min-width:260px;">Threat Intel</th>'
+    +'</tr></thead><tbody>';
+
+  if (!filtered.length) {
+    html += '<tr><td colspan="7" style="text-align:center;color:var(--text2);padding:28px;">No results match current filters</td></tr>';
+  } else {
+    filtered.forEach(function(r,i){
+      var ev=trafficInvManualVerdicts[r.ip]||r.verdict, isMov=!!trafficInvManualVerdicts[r.ip];
+      var evc=ev.replace(' ','_'), dc=isMov?'#bc8cff':'#8b949e';
+      var isChk=!!trafficInvSelected[r.ip];
+      var srcs=Array.isArray(r.sources)?r.sources:[];
+      var sc=r.score>=70?'var(--red)':r.score>=45?'var(--orange)':r.score>=20?'var(--yellow)':'var(--green)';
+      var bdown=srcDefs.map(function(def){
+        var s=srcs.find(function(x){ return x.source===def.key; });
+        if(!s) return '';
+        var pts=s.score||0;
+        var ps=pts>0?'<b style="color:var(--red);">+'+pts.toFixed(1)+' pts</b>':'<span style="color:var(--text2);">-- 0 pts</span>';
+        var ioc=(s.ioc&&s.ioc.length)?s.ioc[0]:(s.error?'Error: '+s.error:'No data');
+        return '<div style="display:flex;gap:6px;align-items:baseline;margin-bottom:3px;">'
+          +'<span style="color:'+def.color+';font-weight:700;min-width:55px;">'+def.label+'</span>'
+          +ps+'<span style="color:var(--text2);margin-left:5px;font-size:10px;">'+esc(ioc)+'</span></div>';
+      }).filter(Boolean).join('');
+      var sel='<select onchange="setTrafficManualVerdict(\''+esc(r.ip)+'\',this.value)" '
+        +'style="background:var(--card);color:'+dc+';border:1px solid '+dc+';border-radius:4px;padding:3px 6px;font-size:11px;font-weight:700;cursor:pointer;">'
+        +'<option value=""'+(isMov?'':' selected')+'>Auto</option>'
+        +verdictOpts.map(function(v){ return '<option value="'+v+'"'+(trafficInvManualVerdicts[r.ip]===v?' selected':'')+'>'+v+'</option>'; }).join('')
+        +'</select>';
+      var isTop10 = !!trafficInvTop10Set[r.ip];
+      html+='<tr>'
+        +'<td><input type="checkbox" class="row-cb tv-inv-row-cb" data-ip="'+esc(r.ip)+'"'+(isChk?' checked':'')+' onchange="onTrafficInvRowCheckbox(this)"></td>'
+        +'<td style="color:var(--text2);">'+(i+1)+'</td>'
+        +'<td style="font-family:monospace;font-size:12px;"><div>'+esc(r.ip)+'</div>'
+        +(isTop10 ? '<div style="margin-top:4px;"><span style="background:#f0883e;color:#000;font-size:9px;font-weight:800;padding:1px 6px;border-radius:3px;letter-spacing:.3px;">TOP 10</span></div>' : '')
+        +'</td>'
+        +'<td><span class="verdict '+evc+'">'+esc(ev)+'</span>'+(isMov?'<span class="mini-badge badge-manual">manual</span>':'')+'</td>'
+        +'<td>'+sel+'</td>'
+        +'<td><div style="display:flex;align-items:center;gap:6px;">'
+        +'<div style="flex:1;height:6px;background:var(--border);border-radius:3px;min-width:60px;">'
+        +'<div style="height:100%;width:'+Math.min(r.score,100)+'%;background:'+sc+';border-radius:3px;"></div></div>'
+        +'<span style="color:'+sc+';font-weight:700;font-size:12px;white-space:nowrap;">'+r.score+'</span></div></td>'
+        +'<td style="font-size:11px;line-height:1.8;">'+(bdown||'--')+'</td></tr>';
+    });
+  }
+  html += '</tbody></table></div>';
+  var note = filtered.length<results.length
+    ? '<div style="font-size:11px;color:var(--text2);margin-bottom:6px;">Showing '+filtered.length+' of '+results.length+' IPs</div>' : '';
+  document.getElementById('tv-inv-results').innerHTML = note+html;
+  var master = document.getElementById('tv-inv-select-all-cb');
+  if (master && anyC && !allC) master.indeterminate = true;
+  var vb = document.getElementById('tv-inv-view-btn');
+  if (vb) vb.style.display = 'block';
+  updateTrafficInvBulkBar();
+  recalcTrafficScore();
+}
+
+function setTrafficManualVerdict(ip, verdict) {
+  if (verdict) {
+    trafficInvManualVerdicts[ip] = verdict;
+    manualVerdicts[ip] = verdict;
+  } else {
+    delete trafficInvManualVerdicts[ip];
+    delete manualVerdicts[ip];
+  }
+  renderTrafficInvResults(trafficInvAllResults);
+  if (allResults.some(function(r){ return r.ip===ip; })) renderResults();
+}
+
+function recalcTrafficScore() {
+  var bonus = 0;
+  trafficInvAllResults.forEach(function(r) {
+    var v = trafficInvManualVerdicts[r.ip]||r.verdict;
+    if      (v==='MALICIOUS')  bonus += 8;
+    else if (v==='HIGH RISK')  bonus += 5;
+    else if (v==='SUSPICIOUS') bonus += 2;
+  });
+  bonus = Math.min(bonus, 35);
+  var newScore = Math.min(trafficBaseScore+bonus, 100);
+  var scoreEl  = document.getElementById('tv-score');
+  var subEl    = document.getElementById('tv-sub');
+  var bannerEl = document.getElementById('tv-banner');
+  if (!scoreEl) return;
+  scoreEl.textContent = 'Score: '+newScore;
+  var bonusStr = bonus>0 ? '  (+'+bonus+' from IP reputation)' : '';
+  subEl.textContent = trafficBaseIndicators+' indicator(s) detected  |  Attack score: '+newScore+'/100'+bonusStr;
+  if (newScore>=55) {
+    bannerEl.className = 'verdict-banner attack';
+    document.getElementById('tv-icon').textContent  = 'X';
+    document.getElementById('tv-label').textContent = 'ATTACK -- Confidence: HIGH'+(bonus>0?' (IP reputation escalated)':'');
+  } else if (newScore>=30) {
+    bannerEl.className = 'verdict-banner suspicious';
+    document.getElementById('tv-icon').textContent  = '!';
+    document.getElementById('tv-label').textContent = 'SUSPICIOUS -- Confidence: MEDIUM';
+  } else {
+    bannerEl.className = 'verdict-banner';
+    document.getElementById('tv-icon').textContent  = 'S';
+    document.getElementById('tv-label').textContent = 'NORMAL TRAFFIC';
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// DDoS Threshold Calculator
+// ══════════════════════════════════════════════════════════
+var TH_SIGS = [
+  // id, name, category, baseLow@1000Mbps, baseHigh@1000Mbps, pktSizeBytes, notes
+  [1,  'TCP ACK',                    'TCP',   50000, 150000,  512,  'Normal session traffic; scale with bandwidth'],
+  [2,  'TCP FIN',                    'TCP',   20000,  80000,  512,  'Legitimate FIN; tight for floods'],
+  [3,  'TCP NULL',                   'TCP',    1000,  10000,  160,  'Near zero in legit traffic — keep very tight'],
+  [4,  'TCP RST',                    'TCP',   20000,  80000,  512,  'Reset floods; moderate threshold'],
+  [5,  'TCP SYN',                    'TCP',   50000, 150000,  512,  'Primary SYN flood vector'],
+  [6,  'TCP SYN-ACK',                'TCP',   30000, 100000,  512,  'Reflection indicator'],
+  [7,  'TCP RST-ACK',                'TCP',   10000,  50000,  512,  'Low legit volume'],
+  [8,  'TCP PSH-ACK',                'TCP',   50000, 150000,  512,  'Data push traffic'],
+  [9,  'TCP Fragmentation',          'TCP',    1000,  10000, 1024,  'Fragmentation attacks; keep tight'],
+  [10, 'TCP Total',                  'TCP',  100000, 300000,  512,  'Main TCP guard — min 10 Kpps (flow sampling)'],
+  [11, 'Echo Reflection',            'UDP',    1000,  10000,  512,  'Legacy echo — very low legit use'],
+  [12, 'ARD/ARMS Reflection',        'UDP',    1000,  10000,  512,  'Apple Remote Desktop amplifier'],
+  [13, 'BITTORRENT Reflection',      'UDP',    1000,  10000,  512,  'P2P amplification'],
+  [14, 'CLDAP Reflection',           'UDP',    1000,  10000,  800,  'High amplification factor'],
+  [15, 'CHARGEN Reflection',         'UDP',    1000,  10000,  256,  'Legacy protocol — near zero legit'],
+  [16, 'COAP Reflection',            'UDP',    1000,  10000,  512,  'IoT protocol amplifier'],
+  [17, 'DNS Reflection',             'UDP',    5000,  20000, 1600,  'Common attack vector'],
+  [18, 'DNS Flood',                  'UDP',   10000,  30000,  800,  'Direct DNS query flood'],
+  [19, 'JENKINS Reflection',         'UDP',    1000,  10000,  512,  'CI/CD exploit vector'],
+  [20, 'KAD (P2P) Reflection',       'UDP',    1000,  10000,  512,  'P2P network amplifier'],
+  [21, 'L2TP Reflection',            'UDP',    1000,  10000,  512,  'VPN protocol amplifier'],
+  [22, 'MEMCACHED Reflection',       'UDP',    1000,  10000, 5600,  'Extreme amplification ~50,000×'],
+  [23, 'mDNS Reflection',            'UDP',    1000,  10000,  800,  'Local DNS amplifier'],
+  [24, 'MS SQL (MC-SQLR) Reflection','UDP',    1000,  10000,  512,  'SQL Server amplifier'],
+  [25, 'NTP Reflection',             'UDP',    1000,  10000, 3744,  'High amplification ~556×'],
+  [26, 'NETBIOS Reflection',         'UDP',    1000,  10000,  512,  'Windows NetBIOS'],
+  [27, 'QOTD Reflection',            'UDP',    1000,  10000,  256,  'Legacy — near zero legit'],
+  [28, 'QUAKE Protocol Reflection',  'UDP',    1000,  10000,  512,  'Gaming protocol'],
+  [29, 'RPCBIND Reflection',         'UDP',    1000,  10000,  512,  'NFS/RPC amplifier'],
+  [30, 'RIPv1 Reflection',           'UDP',    1000,  10000,  512,  'Routing protocol amplifier'],
+  [31, 'SLP Reflection',             'UDP',    1000,  10000,  512,  'Service discovery amplifier'],
+  [32, 'SNMP Reflection',            'UDP',    1000,  10000,  800,  'High amplification ~650×'],
+  [33, 'SSDP Reflection',            'UDP',    1000,  10000, 1600,  'UPnP amplification ~30×'],
+  [34, 'SENTINEL Reflection',        'UDP',    1000,  10000,  512,  'License server amplifier'],
+  [35, 'STEAM Protocol Reflection',  'UDP',    1000,  10000,  512,  'Gaming platform amplifier'],
+  [36, 'TFTP Reflection',            'UDP',    1000,  10000,  512,  'File transfer amplifier'],
+  [37, 'TP240PhoneHome Reflection',  'UDP',    1000,  10000,  947,  'Extreme ~4.3B× amplification'],
+  [38, 'WS-DISCOVERY Reflection',    'UDP',    1000,  10000,  512,  'Windows discovery amplifier'],
+  [39, 'CUPS Reflection',            'UDP',    1000,  10000,  512,  'Print server amplifier (CVE-2024)'],
+  [40, 'QUIC Reflection',            'UDP',    1000,  10000, 1024,  'New QUIC protocol vector'],
+  [41, 'UDP Fragmentation',          'UDP',    1000,  10000, 1024,  'Fragmentation evasion'],
+  [42, 'UDP Total',                  'UDP',  100000, 300000, 1024,  'Main UDP guard — min 10 Kpps'],
+  [43, 'ICMP Invalid',               'ICMP',   1000,  10000,  256,  'Malformed ICMP — no legit use'],
+  [44, 'ICMP Total',                 'ICMP',   5000,  20000,  512,  'Ping floods — min 10 Kpps'],
+  [45, 'HTTP Flood',                 'HTTP',   5000,  20000, 6400,  'Layer 7 HTTP GET/POST flood'],
+  [46, 'HTTPS Flood',                'HTTP',   5000,  20000, 6400,  'Encrypted L7 flood'],
+  [47, 'IP Bogons',                  'IP',     1000,  10000,   51,  'Spoofed/invalid source IPs'],
+  [48, 'IP LAND',                    'IP',     1000,  10000,   51,  'Src=Dst attack — no legit use'],
+  [49, 'IP Fragmentation',           'IP',     1000,  10000, 1024,  'Fragmentation evasion technique'],
+  [50, 'SIP Flood',                  'SIP',    2000,  10000, 4000,  'VoIP flood — min 10 Kpps; adjust for SIP-heavy'],
+  [51, 'Total Traffic (pps)',        'TOTAL', 200000,500000, 1024,  'Master circuit breaker'],
+  [52, 'Total Traffic (bps)',        'TOTAL',   null,   null, null,  '50% low / 90% high of pipe bandwidth']
+];
+
+var TH_MODE_INFO = {
+  normal:      'Default starting point. Monitor alerts for 2 weeks after deployment, adjust upward to eliminate false positives. Mark false positives to train Smart Detection AI.',
+  normal_plus: 'Enhanced Normal with Confidence Level (0–100%). Alerts below your confidence threshold are tracked internally but will not trigger email or mitigation. Use when Normal generates too many low-confidence alerts.',
+  rapid:       '⚠️ Highly prone to false positives. Set TCP/UDP Total and Total Traffic at MORE than 2× expected volume. Reflection UDP thresholds can remain similar to Normal mode.',
+  smart:       'AI-based mode using platform-wide historical attack patterns. Use when no customer traffic history is available. May produce false positives for low-bandwidth customers.'
+};
+
+var TH_CAT_FILTER = 'ALL';
+
+function fmtPps(n) {
+  if (n === null || isNaN(n)) return '—';
+  if (n >= 1000000) return (n/1000000).toFixed(2) + 'M';
+  if (n >= 1000)    return (n/1000).toFixed(1) + 'K';
+  return n.toString();
+}
+function fmtBps(n, bw) {
+  if (n === null || isNaN(n)) return '—';
+  var mbps = n / 1000000;
+  if (mbps >= 1000) return (mbps/1000).toFixed(2) + ' Gbps';
+  if (mbps >= 1)    return mbps.toFixed(1) + ' Mbps';
+  return (n/1000).toFixed(0) + ' Kbps';
+}
+
+function calcThresholds(sig, bw, scope) {
+  var id=sig[0], name=sig[1], cat=sig[2], baseLow=sig[3], baseHigh=sig[4], pktSize=sig[5];
+  var ratio = bw / 1000;
+  // bps-only row (Total Traffic bps)
+  if (pktSize === null) {
+    return { ppsLow: null, ppsHigh: null,
+             bpsLow:  Math.round(bw * 1000000 * 0.5),
+             bpsHigh: Math.round(bw * 1000000 * 0.9) };
+  }
+  var ppsLow  = Math.round(baseLow  * ratio);
+  var ppsHigh = Math.round(baseHigh * ratio);
+  if (scope === 'network') {
+    ppsLow  = Math.max(ppsLow,  10000);
+    ppsHigh = Math.max(ppsHigh, 100000);
+  } else {
+    ppsLow  = Math.max(ppsLow,  1000);
+    ppsHigh = Math.max(ppsHigh, 5000);
+  }
+  return { ppsLow: ppsLow, ppsHigh: ppsHigh,
+           bpsLow:  ppsLow  * pktSize,
+           bpsHigh: ppsHigh * pktSize };
+}
+
+function catColor(cat) {
+  return {TCP:'var(--cyan)',UDP:'var(--orange,#f0883e)',ICMP:'#bc8cff',
+          HTTP:'var(--yellow)',IP:'var(--red)',SIP:'var(--green)',TOTAL:'#58a6ff'}[cat] || 'var(--text2)';
+}
+
+function recalcThresholds() {
+  var bw    = Math.max(1, parseInt(document.getElementById('th-bw').value)||1000);
+  var scope = document.querySelector('input[name="th-scope"]:checked').value;
+  var mode  = document.getElementById('th-mode').value;
+  // sync slider
+  var slider = document.getElementById('th-bw-slider');
+  if (slider) slider.value = Math.min(bw, 10000);
+
+  // mode info
+  document.getElementById('th-mode-info').innerHTML =
+    '<b style="color:var(--text);">' + mode.replace('_',' ').replace(/\b\w/g,function(c){return c.toUpperCase();}) + ' Mode:</b> ' + TH_MODE_INFO[mode];
+
+  // summary pills
+  var synTh  = calcThresholds(TH_SIGS[4], bw, scope);
+  var udpTh  = calcThresholds(TH_SIGS[41], bw, scope);
+  var totTh  = calcThresholds(TH_SIGS[51], bw, scope);
+  document.getElementById('th-summary').innerHTML =
+    '<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;flex:1;min-width:140px;">'
+    +'<div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">TCP SYN High</div>'
+    +'<div style="font-size:18px;font-weight:700;color:var(--cyan);">'+fmtPps(synTh.ppsHigh)+' pps</div></div>'
+    +'<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;flex:1;min-width:140px;">'
+    +'<div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">UDP Total High</div>'
+    +'<div style="font-size:18px;font-weight:700;color:#f0883e;">'+fmtPps(udpTh.ppsHigh)+' pps</div></div>'
+    +'<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;flex:1;min-width:140px;">'
+    +'<div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Total Traffic High</div>'
+    +'<div style="font-size:18px;font-weight:700;color:var(--green);">'+fmtBps(totTh.bpsHigh)+'</div></div>'
+    +'<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;flex:1;min-width:140px;">'
+    +'<div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Scope</div>'
+    +'<div style="font-size:18px;font-weight:700;color:var(--text);">'+(scope==='host'?'Host /32':'Network /24')+'</div></div>';
+
+  // Rapid mode multiplier note
+  var rapidNote = (mode === 'rapid')
+    ? '<span style="color:var(--yellow);font-weight:700;"> ×2 for Total</span>' : '';
+
+  // Build table rows
+  var html = '';
+  var rowNum = 0;
+  TH_SIGS.forEach(function(sig) {
+    if (TH_CAT_FILTER !== 'ALL' && sig[2] !== TH_CAT_FILTER) return;
+    rowNum++;
+    var th    = calcThresholds(sig, bw, scope);
+    var cc    = catColor(sig[2]);
+    var isTot = sig[2] === 'TOTAL';
+    var ppsL  = th.ppsLow  !== null ? fmtPps(mode==='rapid'&&isTot ? th.ppsLow*2  : th.ppsLow)  : '—';
+    var ppsH  = th.ppsHigh !== null ? fmtPps(mode==='rapid'&&isTot ? th.ppsHigh*2 : th.ppsHigh) : '—';
+    var bpsL  = fmtBps(mode==='rapid'&&isTot ? th.bpsLow*2  : th.bpsLow);
+    var bpsH  = fmtBps(mode==='rapid'&&isTot ? th.bpsHigh*2 : th.bpsHigh);
+    var rowBg = (rowNum%2===0) ? 'background:var(--bg3,#161b22);' : '';
+    html += '<tr style="'+rowBg+'border-bottom:1px solid var(--border);">'
+      +'<td style="padding:8px 12px;color:var(--text2);font-size:11px;">'+sig[0]+'</td>'
+      +'<td style="padding:8px 12px;color:var(--text);font-weight:500;">'+sig[1]+'</td>'
+      +'<td style="padding:8px 12px;"><span style="background:transparent;border:1px solid '+cc+';color:'+cc+';font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;letter-spacing:.3px;">'+sig[2]+'</span></td>'
+      +'<td style="padding:8px 12px;text-align:right;font-family:monospace;color:var(--text);">'+ppsL+'</td>'
+      +'<td style="padding:8px 12px;text-align:right;font-family:monospace;color:var(--cyan);font-weight:700;">'+ppsH+(isTot&&mode==='rapid'?'*':'')+'</td>'
+      +'<td style="padding:8px 12px;text-align:right;font-family:monospace;color:var(--text2);">'+bpsL+'</td>'
+      +'<td style="padding:8px 12px;text-align:right;font-family:monospace;color:var(--cyan);font-weight:600;">'+bpsH+'</td>'
+      +'<td style="padding:8px 12px;color:var(--text2);font-size:11px;">'+sig[6]+'</td>'
+      +'</tr>';
+  });
+  document.getElementById('th-tbody').innerHTML = html || '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text2);">No signatures in this category</td></tr>';
+}
+
+function setThCat(cat, btn) {
+  TH_CAT_FILTER = cat;
+  document.querySelectorAll('#th-cat-filter .filter-btn').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+  recalcThresholds();
+}
+
+function exportThresholdCSV() {
+  var bw    = parseInt(document.getElementById('th-bw').value)||1000;
+  var scope = document.querySelector('input[name="th-scope"]:checked').value;
+  var mode  = document.getElementById('th-mode').value;
+  var rows  = [['#','Signature','Category','Low_pps','High_pps','Low_bps','High_bps','Notes']];
+  TH_SIGS.forEach(function(sig) {
+    var th = calcThresholds(sig, bw, scope);
+    var isTot = sig[2]==='TOTAL', rm = mode==='rapid'&&isTot ? 2 : 1;
+    rows.push([
+      sig[0], sig[1], sig[2],
+      th.ppsLow  !== null ? th.ppsLow*rm  : 'N/A',
+      th.ppsHigh !== null ? th.ppsHigh*rm : 'N/A',
+      th.bpsLow  !== null ? th.bpsLow*rm  : 'N/A',
+      th.bpsHigh !== null ? th.bpsHigh*rm : 'N/A',
+      sig[6]
+    ]);
+  });
+  var csv = rows.map(function(r){ return r.map(function(c){ return '"'+String(c).replace(/"/g,'""')+'"'; }).join(','); }).join('\n');
+  var blob = new Blob([csv], {type:'text/csv'});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'ddos_thresholds_'+bw+'mbps_'+scope+'_'+mode+'.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// Init on page load
+document.addEventListener('DOMContentLoaded', function(){ recalcThresholds(); });
+
+fetch('/api/health').then(function(r){ return r.json(); }).then(function(d){
+    if (!d.sources_configured) {
+      var si = document.getElementById('inv-status');
+      if (si) si.textContent = 'No API keys configured -- go to Settings to add keys.';
+    }
+  }).catch(function(){});
+</script>
+</body>
+</html>
