@@ -1,0 +1,29 @@
+# Secrets / runtime state -- never bake these into an image layer
+config.json
+config.json.bak
+*.env
+.env
+
+# VCS
+.git
+.gitignore
+
+# Python artifacts
+__pycache__
+*.pyc
+*.pyo
+.mypy_cache
+.pytest_cache
+
+# Windows-only / dev-only files, not needed inside the container
+START.bat
+ip_investigator (8).py
+IoC.txt
+README.md
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Misc generated output
+static/test_report.pdf

@@ -1,0 +1,36 @@
+services:
+  ip-investigator:
+    build: .
+    image: ip-investigator:latest
+    container_name: ip-investigator
+    restart: unless-stopped
+
+    # Bound to loopback only -- this app has no auth in front of it, so it
+    # should not be exposed directly to the network. Put a reverse proxy
+    # (nginx/Caddy) with TLS + auth in front if remote/LAN access is needed.
+    ports:
+      - "127.0.0.1:5000:5000"
+
+    # Bind-mount the existing config.json so API keys live on the host,
+    # outside the image, and persist across rebuilds/recreates.
+    volumes:
+      - ./config.json:/app/config.json
+
+    # Defense in depth: read-only root filesystem except for the explicit
+    # mounts above and a scratch /tmp for gunicorn/worker temp files.
+    read_only: true
+    tmpfs:
+      - /tmp
+
+    # Drop Linux capabilities the app never needs (Zero Trust / least privilege)
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5000/api/health',timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3

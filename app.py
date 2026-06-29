@@ -8,6 +8,8 @@ import json
 import os
 import re
 import sys
+import time
+import threading
 import ipaddress
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
@@ -70,7 +72,10 @@ SC = {
 
 SESSION = req_lib.Session()
 SESSION.mount("https://", HTTPAdapter(
-    max_retries=Retry(total=3, backoff_factor=0.6, status_forcelist=[429, 500, 502, 503, 504])
+    # 429 intentionally excluded from auto-retry — we want to read the response and
+    # fail over to a backup API key immediately rather than burning retries on a
+    # key that's already rate-limited.
+    max_retries=Retry(total=3, backoff_factor=0.6, status_forcelist=[500, 502, 503, 504])
 ))
 
 # ── Config ────────────────────────────────────────────────────────
@@ -86,6 +91,83 @@ def load_config():
 def save_config(data):
     with open(CONFIG_PATH, "w") as f:
         json.dump(data, f, indent=2)
+
+# ── Multi-key pools + automatic failover ───────────────────────────
+# Each source field (e.g. "ABUSEIPDB_KEY") may have a primary key stored
+# directly under that field, plus an optional list of backup keys stored
+# under "<FIELD>_BACKUPS". When the primary key gets rate-limited, queries
+# automatically roll over to the next configured backup key.
+BACKUP_SUFFIX = "_BACKUPS"
+
+def get_key_pool(cfg, field):
+    """Return an ordered list of all non-empty API keys configured for a
+    source field: primary key first, then backup keys, de-duplicated."""
+    pool = []
+    primary = cfg.get(field)
+    if isinstance(primary, str) and primary.strip():
+        pool.append(primary.strip())
+    elif isinstance(primary, list):  # tolerate legacy/odd shapes
+        pool.extend(x.strip() for x in primary if isinstance(x, str) and x.strip())
+    backups = cfg.get(field + BACKUP_SUFFIX)
+    if isinstance(backups, list):
+        for b in backups:
+            if isinstance(b, str) and b.strip() and b.strip() not in pool:
+                pool.append(b.strip())
+    return pool
+
+_KEY_STATE_LOCK = threading.Lock()
+_KEY_COOLDOWN  = {}   # {(field, key): unix_ts_until_retry}
+_KEY_LAST_GOOD = {}   # {field: key}
+_KEY_COOLDOWN_SECONDS = 3600  # don't retry a rate-limited key for 1h
+
+_RATE_LIMIT_MARKERS = (
+    "rate limit", "quota", "429", "too many requests", "daily limit",
+    "limit exceeded", "limit reached",
+)
+
+def _looks_rate_limited(result):
+    if not isinstance(result, dict):
+        return False
+    err = (result.get("error") or "").lower()
+    return any(m in err for m in _RATE_LIMIT_MARKERS)
+
+def query_with_key_failover(field, cfg, fn):
+    """Call fn(key) -> result dict, trying each configured key for `field`
+    in turn. Keys that come back rate-limited are put on a cooldown and the
+    next key is tried instead. The last key that worked cleanly is preferred
+    on subsequent calls. Returns None if no key is configured at all."""
+    pool = get_key_pool(cfg, field)
+    if not pool:
+        return None
+
+    now = time.time()
+    with _KEY_STATE_LOCK:
+        last_good = _KEY_LAST_GOOD.get(field)
+        cooldowns = dict(_KEY_COOLDOWN)
+
+    def sort_key(k):
+        in_cooldown = cooldowns.get((field, k), 0) > now
+        return (in_cooldown, k != last_good)
+
+    ordered = sorted(pool, key=sort_key)
+
+    result = None
+    for key in ordered:
+        result = fn(key)
+        if _looks_rate_limited(result):
+            with _KEY_STATE_LOCK:
+                _KEY_COOLDOWN[(field, key)] = time.time() + _KEY_COOLDOWN_SECONDS
+            continue
+        if not result.get("error"):
+            with _KEY_STATE_LOCK:
+                _KEY_LAST_GOOD[field] = key
+        return result
+
+    # Every configured key for this source is currently rate-limited.
+    if result is not None and len(pool) > 1:
+        base_err = result.get("error") or "Rate limit exceeded"
+        result["error"] = "{}  (all {} configured keys rate-limited)".format(base_err, len(pool))
+    return result
 
 # ── Validation ────────────────────────────────────────────────────
 def is_valid_ip(ip):
@@ -108,6 +190,12 @@ def q_abuse(ip, key):
             params={"ipAddress": ip, "maxAgeInDays": 90, "verbose": True},
             timeout=15,
         )
+        if resp.status_code == 429:
+            r["error"] = "Rate limit exceeded (429)"
+            return r
+        if resp.status_code in (401, 403):
+            r["error"] = "Invalid API key"
+            return r
         d = resp.json().get("data", {})
         conf   = d.get("abuseConfidenceScore", 0)
         total  = d.get("totalReports", 0)
@@ -153,6 +241,9 @@ def q_vt(ip, key):
         if resp.status_code == 401:
             r["error"] = "Invalid API key"
             return r
+        if resp.status_code == 429:
+            r["error"] = "Rate limit exceeded (429)"
+            return r
         d = resp.json()
         attrs = d.get("data", {}).get("attributes", {})
         stats = attrs.get("last_analysis_stats", {})
@@ -182,8 +273,19 @@ def q_otx(ip, key):
     base = "https://otx.alienvault.com/api/v1/indicators/IPv4/{}".format(ip)
     hdrs = {"X-OTX-API-KEY": key}
     try:
-        gen = SESSION.get("{}/general".format(base), headers=hdrs, timeout=15).json()
-        mal = SESSION.get("{}/malware".format(base), headers=hdrs, timeout=15).json()
+        resp1 = SESSION.get("{}/general".format(base), headers=hdrs, timeout=15)
+        if resp1.status_code == 429:
+            r["error"] = "Rate limit exceeded (429)"
+            return r
+        if resp1.status_code in (401, 403):
+            r["error"] = "Invalid API key"
+            return r
+        gen = resp1.json()
+        resp2 = SESSION.get("{}/malware".format(base), headers=hdrs, timeout=15)
+        if resp2.status_code == 429:
+            r["error"] = "Rate limit exceeded (429)"
+            return r
+        mal = resp2.json()
         pulse_count = gen.get("pulse_info", {}).get("count", 0)
         r["ioc"].append("Pulse hits: {}  |  Country: {}  |  ASN: {}".format(
             pulse_count, gen.get("country_name", "N/A"), gen.get("asn", "N/A")))
@@ -222,6 +324,9 @@ def q_ha(ip, key):
         )
         if resp.status_code == 401:
             r["error"] = "Invalid API key"
+            return r
+        if resp.status_code == 429:
+            r["error"] = "Rate limit exceeded (429)"
             return r
         if not resp.ok:
             r["ioc"].append("No records found in Hybrid Analysis")
@@ -430,6 +535,8 @@ def q_vt_hash(h, key):
             return r
         if resp.status_code == 401:
             r["error"] = "Invalid API key"; return r
+        if resp.status_code == 429:
+            r["error"] = "Rate limit exceeded (429)"; return r
         d     = resp.json()
         attrs = d.get("data", {}).get("attributes", {})
         stats = attrs.get("last_analysis_stats", {})
@@ -514,8 +621,16 @@ def q_otx_hash(h, key):
     base  = "https://otx.alienvault.com/api/v1/indicators/{}/{}".format(itype, h)
     hdrs  = {"X-OTX-API-KEY": key}
     try:
-        gen = SESSION.get("{}/general".format(base), headers=hdrs, timeout=15).json()
-        ana = SESSION.get("{}/analysis".format(base), headers=hdrs, timeout=15).json()
+        resp1 = SESSION.get("{}/general".format(base), headers=hdrs, timeout=15)
+        if resp1.status_code == 429:
+            r["error"] = "Rate limit exceeded (429)"; return r
+        if resp1.status_code in (401, 403):
+            r["error"] = "Invalid API key"; return r
+        gen = resp1.json()
+        resp2 = SESSION.get("{}/analysis".format(base), headers=hdrs, timeout=15)
+        if resp2.status_code == 429:
+            r["error"] = "Rate limit exceeded (429)"; return r
+        ana = resp2.json()
         pulse_count = gen.get("pulse_info", {}).get("count", 0)
         r["ioc"].append("Pulse hits: {}".format(pulse_count))
         r["score"] += min(pulse_count * SC["otx_pulse_per_hit"], SC["otx_max"])
@@ -549,6 +664,8 @@ def q_ha_hash(h, key):
         )
         if resp.status_code == 401:
             r["error"] = "Invalid API key"; return r
+        if resp.status_code == 429:
+            r["error"] = "Rate limit exceeded (429)"; return r
         if not resp.ok:
             r["ioc"].append("No records found"); return r
         results  = resp.json()
@@ -608,18 +725,19 @@ def investigate_hash(h, cfg, active_sources=None):
     ht = detect_hash_type(h)
     tasks = {}
     with ThreadPoolExecutor(max_workers=4) as ex:
-        if "virustotal" in active_sources and cfg.get("VIRUSTOTAL_KEY"):
-            tasks["vt"] = ex.submit(q_vt_hash, h, cfg["VIRUSTOTAL_KEY"])
+        if "virustotal" in active_sources and get_key_pool(cfg, "VIRUSTOTAL_KEY"):
+            tasks["vt"] = ex.submit(query_with_key_failover, "VIRUSTOTAL_KEY", cfg, lambda k: q_vt_hash(h, k))
         if "malwarebazaar" in active_sources:
             tasks["mb"] = ex.submit(q_malwarebazaar, h)
-        if "otx" in active_sources and cfg.get("OTX_KEY"):
-            tasks["otx"] = ex.submit(q_otx_hash, h, cfg["OTX_KEY"])
-        if "hybrid" in active_sources and cfg.get("HA_KEY"):
-            tasks["ha"] = ex.submit(q_ha_hash, h, cfg["HA_KEY"])
+        if "otx" in active_sources and get_key_pool(cfg, "OTX_KEY"):
+            tasks["otx"] = ex.submit(query_with_key_failover, "OTX_KEY", cfg, lambda k: q_otx_hash(h, k))
+        if "hybrid" in active_sources and get_key_pool(cfg, "HA_KEY"):
+            tasks["ha"] = ex.submit(query_with_key_failover, "HA_KEY", cfg, lambda k: q_ha_hash(h, k))
         results = []
         for k, fut in tasks.items():
             try:
-                results.append(fut.result())
+                res = fut.result()
+                results.append(res if res is not None else {"source": k, "score": 0, "ioc": [], "error": "No API key"})
             except Exception as e:
                 results.append({"source": k, "score": 0, "ioc": [], "error": str(e)})
     score, v = calc_hash_verdict(results)
@@ -672,24 +790,29 @@ def investigate(ip, cfg, active_sources=None):
 
     tasks = {}
     with ThreadPoolExecutor(max_workers=7) as ex:
-        if "abuseipdb" in active_sources and cfg.get("ABUSEIPDB_KEY"):
-            tasks["abuse"] = ex.submit(q_abuse, ip, cfg["ABUSEIPDB_KEY"])
-        if "virustotal" in active_sources and cfg.get("VIRUSTOTAL_KEY"):
-            tasks["vt"] = ex.submit(q_vt, ip, cfg["VIRUSTOTAL_KEY"])
-        if "otx" in active_sources and cfg.get("OTX_KEY"):
-            tasks["otx"] = ex.submit(q_otx, ip, cfg["OTX_KEY"])
-        if "hybrid" in active_sources and cfg.get("HA_KEY"):
-            tasks["ha"] = ex.submit(q_ha, ip, cfg["HA_KEY"])
-        if "greynoise" in active_sources and cfg.get("GREYNOISE_KEY"):
-            tasks["gn"] = ex.submit(q_greynoise, ip, cfg["GREYNOISE_KEY"])
+        if "abuseipdb" in active_sources and get_key_pool(cfg, "ABUSEIPDB_KEY"):
+            tasks["abuse"] = ex.submit(query_with_key_failover, "ABUSEIPDB_KEY", cfg, lambda k: q_abuse(ip, k))
+        if "virustotal" in active_sources and get_key_pool(cfg, "VIRUSTOTAL_KEY"):
+            tasks["vt"] = ex.submit(query_with_key_failover, "VIRUSTOTAL_KEY", cfg, lambda k: q_vt(ip, k))
+        if "otx" in active_sources and get_key_pool(cfg, "OTX_KEY"):
+            tasks["otx"] = ex.submit(query_with_key_failover, "OTX_KEY", cfg, lambda k: q_otx(ip, k))
+        if "hybrid" in active_sources and get_key_pool(cfg, "HA_KEY"):
+            tasks["ha"] = ex.submit(query_with_key_failover, "HA_KEY", cfg, lambda k: q_ha(ip, k))
+        if "greynoise" in active_sources and get_key_pool(cfg, "GREYNOISE_KEY"):
+            tasks["gn"] = ex.submit(query_with_key_failover, "GREYNOISE_KEY", cfg, lambda k: q_greynoise(ip, k))
         if "ipapi" in active_sources:
             tasks["ipapi"] = ex.submit(q_ipapi, ip)
         if "threatfox" in active_sources:
-            tasks["threatfox"] = ex.submit(q_threatfox, ip, cfg.get("THREATFOX_KEY", ""))
+            tf_pool = get_key_pool(cfg, "THREATFOX_KEY")
+            if tf_pool:
+                tasks["threatfox"] = ex.submit(query_with_key_failover, "THREATFOX_KEY", cfg, lambda k: q_threatfox(ip, k))
+            else:
+                tasks["threatfox"] = ex.submit(q_threatfox, ip, "")
         results = []
         for k, fut in tasks.items():
             try:
-                results.append(fut.result())
+                res = fut.result()
+                results.append(res if res is not None else {"source": k, "score": 0, "ioc": [], "error": "No API key"})
             except Exception as e:
                 results.append({"source": k, "score": 0, "ioc": [], "error": str(e)})
     score, v = calc_verdict(results)
@@ -711,17 +834,62 @@ CORS(app)
 def index():
     return send_from_directory(STATIC_DIR, "index.html")
 
+CONFIG_FIELDS = ["ABUSEIPDB_KEY", "VIRUSTOTAL_KEY", "OTX_KEY", "HA_KEY", "GREYNOISE_KEY", "THREATFOX_KEY"]
+
+def _mask_key(v):
+    if not v:
+        return ""
+    # Short, fixed-width preview (e.g. "65bd...b411") instead of a full-length
+    # run of asterisks -- long keys were overflowing/overlapping the Settings UI.
+    return v[:4] + "..." + v[-4:] if len(v) > 8 else "*" * len(v)
+
 @app.route("/api/config", methods=["GET"])
 def get_config():
     cfg = load_config()
-    # Mask keys for display
+    # Mask primary keys for display
     masked = {}
-    for k, v in cfg.items():
-        if v and len(v) > 8:
-            masked[k] = v[:4] + "*" * (len(v) - 8) + v[-4:]
-        else:
-            masked[k] = "*" * len(v) if v else ""
-    return jsonify({"config": masked, "keys_configured": list(cfg.keys())})
+    for k in CONFIG_FIELDS:
+        v = cfg.get(k)
+        if isinstance(v, str):
+            masked[k] = _mask_key(v)
+    # Mask backup keys for display, keyed by the base field name
+    backup_keys = {}
+    for k in CONFIG_FIELDS:
+        backups = cfg.get(k + BACKUP_SUFFIX)
+        if isinstance(backups, list) and backups:
+            backup_keys[k] = [_mask_key(b) for b in backups]
+    keys_configured = [k for k in CONFIG_FIELDS if get_key_pool(cfg, k)]
+    return jsonify({
+        "config": masked,
+        "backup_keys": backup_keys,
+        "key_counts": {k: len(get_key_pool(cfg, k)) for k in CONFIG_FIELDS},
+        "keys_configured": keys_configured,
+    })
+
+@app.route("/api/config/reveal", methods=["GET"])
+def reveal_config_key():
+    """Return the real (unmasked) value of a stored key so the Settings UI's
+    eye/show button can display it. This app is single-user and local-only —
+    the same plaintext value already lives in config.json on disk — so this
+    does not expose anything beyond what's already readable on this machine."""
+    field = request.args.get("field", "")
+    index_raw = request.args.get("index")
+    if field not in CONFIG_FIELDS:
+        return jsonify({"error": "Unknown field: {}".format(field)}), 400
+    cfg = load_config()
+    if index_raw is None:
+        value = cfg.get(field)
+        if not value:
+            return jsonify({"error": "No primary key set for this source"}), 404
+        return jsonify({"key": value})
+    try:
+        index = int(index_raw)
+    except ValueError:
+        return jsonify({"error": "index must be an integer"}), 400
+    backups = cfg.get(field + BACKUP_SUFFIX)
+    if not isinstance(backups, list) or index < 0 or index >= len(backups):
+        return jsonify({"error": "Backup key not found"}), 404
+    return jsonify({"key": backups[index]})
 
 @app.route("/api/config", methods=["POST"])
 def update_config():
@@ -729,14 +897,65 @@ def update_config():
     if not data:
         return jsonify({"error": "No data provided"}), 400
     cfg = load_config()
-    allowed = ["ABUSEIPDB_KEY", "VIRUSTOTAL_KEY", "OTX_KEY", "HA_KEY", "GREYNOISE_KEY", "THREATFOX_KEY"]
-    for k in allowed:
+    for k in CONFIG_FIELDS:
         if k in data and data[k]:
-            cfg[k] = data[k]
+            cfg[k] = data[k].strip()
         elif k in data and data[k] == "":
             cfg.pop(k, None)
     save_config(cfg)
     return jsonify({"success": True, "message": "Configuration saved"})
+
+@app.route("/api/config/backup-key", methods=["POST"])
+def add_backup_key():
+    """Add an additional (backup) API key for a source. When the primary key
+    for that source gets rate-limited, the app automatically rolls over to
+    backup keys in the order they were added."""
+    data = request.get_json() or {}
+    field = data.get("field", "")
+    key = (data.get("key") or "").strip()
+    if field not in CONFIG_FIELDS:
+        return jsonify({"error": "Unknown field: {}".format(field)}), 400
+    if not key:
+        return jsonify({"error": "No key provided"}), 400
+    cfg = load_config()
+    existing_pool = get_key_pool(cfg, field)
+    if key in existing_pool:
+        return jsonify({"error": "That key is already configured for this source"}), 400
+    backups = cfg.get(field + BACKUP_SUFFIX)
+    if not isinstance(backups, list):
+        backups = []
+    if not cfg.get(field):
+        # No primary key set yet — this becomes the primary instead of a backup
+        cfg[field] = key
+    else:
+        backups.append(key)
+        cfg[field + BACKUP_SUFFIX] = backups
+    save_config(cfg)
+    return jsonify({"success": True, "key_count": len(get_key_pool(cfg, field))})
+
+@app.route("/api/config/backup-key", methods=["DELETE"])
+def remove_backup_key():
+    """Remove a backup key (by index, 0-based, within that source's backup list)."""
+    data = request.get_json() or {}
+    field = data.get("field", "")
+    index = data.get("index")
+    if field not in CONFIG_FIELDS:
+        return jsonify({"error": "Unknown field: {}".format(field)}), 400
+    if not isinstance(index, int):
+        return jsonify({"error": "index must be an integer"}), 400
+    cfg = load_config()
+    backups = cfg.get(field + BACKUP_SUFFIX)
+    if not isinstance(backups, list) or index < 0 or index >= len(backups):
+        return jsonify({"error": "Backup key not found"}), 404
+    removed_key = backups.pop(index)
+    cfg[field + BACKUP_SUFFIX] = backups
+    # Clear any cooldown state tied to the removed key so it doesn't linger
+    with _KEY_STATE_LOCK:
+        _KEY_COOLDOWN.pop((field, removed_key), None)
+        if _KEY_LAST_GOOD.get(field) == removed_key:
+            _KEY_LAST_GOOD.pop(field, None)
+    save_config(cfg)
+    return jsonify({"success": True, "key_count": len(get_key_pool(cfg, field))})
 
 @app.route("/api/investigate", methods=["POST"])
 def api_investigate():
@@ -1153,7 +1372,7 @@ def api_investigate_hash_stream():
 @app.route("/api/health", methods=["GET"])
 def health():
     cfg = load_config()
-    configured = [k for k in ["ABUSEIPDB_KEY","VIRUSTOTAL_KEY","OTX_KEY","HA_KEY","GREYNOISE_KEY","THREATFOX_KEY"] if cfg.get(k)]
+    configured = [k for k in CONFIG_FIELDS if get_key_pool(cfg, k)]
     return jsonify({"status":"ok","sources_configured":len(configured),"sources":configured,
                     "timestamp":datetime.now(timezone.utc).isoformat()})
 
@@ -1436,15 +1655,30 @@ def analyze_traffic_csv(file_content):
 
 @app.route("/api/analyze/traffic", methods=["POST"])
 def api_analyze_traffic():
-    f = request.files.get("csv")
-    if not f:
+    files = request.files.getlist("csv")
+    if not files:
         return jsonify({"error": "No CSV file uploaded. Send multipart field 'csv'."}), 400
-    content = f.read()
-    if len(content) > 10 * 1024 * 1024:
-        return jsonify({"error": "File too large (max 10 MB)."}), 400
-    result = analyze_traffic_csv(content)
+
+    merged_chunks = []
+    file_names    = []
+    total_size    = 0
+    for f in files:
+        chunk = f.read()
+        total_size += len(chunk)
+        if total_size > 15 * 1024 * 1024:
+            return jsonify({"error": "Combined file size too large (max 15 MB)."}), 400
+        if chunk and not chunk.endswith(b"\n"):
+            chunk += b"\n"
+        merged_chunks.append(chunk)
+        file_names.append(f.filename or "unnamed.csv")
+
+    merged_content = b"".join(merged_chunks)
+    result = analyze_traffic_csv(merged_content)
     if "error" in result:
         return jsonify(result), 400
+
+    result["merged_files"] = file_names
+    result["file_count"]   = len(files)
     return jsonify(result)
 
 

@@ -164,11 +164,22 @@ tr:hover td{background:var(--bg3);}
 .settings-grid{display:grid;gap:16px;}
 .setting-row{display:grid;grid-template-columns:200px 1fr auto;align-items:center;gap:12px;padding:14px;background:var(--bg3);border-radius:8px;}
 .setting-row label{font-size:13px;font-weight:500;}
-.setting-row .hint{font-size:11px;color:var(--text2);margin-top:2px;}
+.setting-row .hint{font-size:11px;color:var(--text2);margin-top:2px;overflow-wrap:anywhere;word-break:break-word;max-width:100%;}
+.setting-row .hint .key-preview{font-family:'Consolas',monospace;white-space:nowrap;}
 .setting-row input{background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 12px;font-size:13px;font-family:'Consolas',monospace;outline:none;width:100%;}
 .setting-row input:focus{border-color:var(--cyan);}
 .key-status{width:10px;height:10px;border-radius:50%;background:var(--border);}
 .key-status.ok{background:var(--green);}
+.key-group{display:flex;flex-direction:column;}
+.backup-keys-section{display:flex;flex-direction:column;gap:6px;padding:10px 14px 14px 14px;margin-top:-6px;background:var(--bg3);border-radius:0 0 8px 8px;border-top:1px dashed var(--border);}
+.backup-chip{display:flex;align-items:center;justify-content:space-between;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:12px;font-family:'Consolas',monospace;gap:10px;}
+.backup-chip .backup-label{color:var(--text2);}
+.backup-chip button{background:none;border:none;color:var(--text2);cursor:pointer;font-size:13px;padding:0 4px;line-height:1;}
+.backup-chip button:hover{color:var(--red);}
+.backup-add-row{display:flex;gap:8px;margin-top:2px;}
+.backup-add-row input{flex:1;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px 10px;font-size:12px;font-family:'Consolas',monospace;outline:none;}
+.backup-add-row input:focus{border-color:var(--cyan);}
+.backup-hint{font-size:11px;color:var(--text2);}
 
 /* Export row */
 .export-row{display:flex;gap:8px;flex-wrap:wrap;}
@@ -293,7 +304,7 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
       <!-- Custom toggles (hidden by default) -->
       <div id="custom-sources" style="display:none;margin-top:14px;">
         <div style="font-size:11px;color:var(--text2);margin-bottom:6px;font-weight:600;">IP SOURCES</div>
-        <div class="sources-toggle" style="margin-bottom:12px;">
+        <div class="sources-toggle" id="ip-sources-toggle" style="margin-bottom:12px;">
           <label class="src-toggle" data-src="abuseipdb">    <input type="checkbox" checked onchange="updateSourcesSummary()"><span class="src-chip">AbuseIPDB</span></label>
           <label class="src-toggle" data-src="virustotal">   <input type="checkbox" checked onchange="updateSourcesSummary()"><span class="src-chip">VirusTotal</span></label>
           <label class="src-toggle" data-src="otx">          <input type="checkbox" checked onchange="updateSourcesSummary()"><span class="src-chip">AlienVault OTX</span></label>
@@ -304,10 +315,10 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
         </div>
         <div style="font-size:11px;color:var(--text2);margin-bottom:6px;font-weight:600;">HASH SOURCES</div>
         <div class="sources-toggle" id="hash-sources-toggle">
-          <label class="src-toggle" data-src="virustotal">   <input type="checkbox" checked><span class="src-chip">VirusTotal</span></label>
-          <label class="src-toggle" data-src="malwarebazaar"><input type="checkbox" checked><span class="src-chip">MalwareBazaar</span></label>
-          <label class="src-toggle" data-src="otx">          <input type="checkbox" checked><span class="src-chip">AlienVault OTX</span></label>
-          <label class="src-toggle" data-src="hybrid">       <input type="checkbox" checked><span class="src-chip">Hybrid Analysis</span></label>
+          <label class="src-toggle" data-src="virustotal">   <input type="checkbox" checked onchange="updateSourcesSummary()"><span class="src-chip">VirusTotal</span></label>
+          <label class="src-toggle" data-src="malwarebazaar"><input type="checkbox" checked onchange="updateSourcesSummary()"><span class="src-chip">MalwareBazaar</span></label>
+          <label class="src-toggle" data-src="otx">          <input type="checkbox" checked onchange="updateSourcesSummary()"><span class="src-chip">AlienVault OTX</span></label>
+          <label class="src-toggle" data-src="hybrid">       <input type="checkbox" checked onchange="updateSourcesSummary()"><span class="src-chip">Hybrid Analysis</span></label>
         </div>
       </div>
     </div>
@@ -816,9 +827,87 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
     <div style="margin-bottom:20px;display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;">
       <div>
         <h2 style="color:var(--cyan);font-size:20px;font-weight:700;margin-bottom:4px;">🧮 DDoS Threshold Calculator</h2>
-        <p style="color:var(--text2);font-size:13px;margin:0;">Anti-DDoS detection thresholds for Host (/32) and Network (/24) scopes. Thresholds scale automatically with customer bandwidth.</p>
+        <p style="color:var(--text2);font-size:13px;margin:0;">Anti-DDoS detection thresholds for Host (/32) and Network scopes. Thresholds scale automatically with customer bandwidth.</p>
       </div>
       <button class="btn btn-sm" onclick="exportThresholdCSV()" style="white-space:nowrap;">⬇ Export CSV</button>
+    </div>
+
+    <!-- Subnet Auto-Calculator card -->
+    <div class="card" style="margin-bottom:16px;border-color:var(--cyan);background:rgba(88,166,255,.04);">
+      <div style="font-size:11px;color:var(--cyan);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:14px;">⚡ Auto-Calculate from Customer Prefix</div>
+
+      <!-- BW row -->
+      <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;margin-bottom:14px;">
+        <div>
+          <div style="font-size:11px;color:var(--text2);font-weight:600;margin-bottom:6px;">Domestic BW</div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <input id="th-bw-domestic" type="number" min="0" max="100000" value="0" placeholder="0"
+              oninput="syncTotalBW()"
+              style="width:80px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:14px;font-weight:700;">
+            <span style="color:var(--text2);font-size:12px;">Mbps</span>
+          </div>
+        </div>
+        <div style="color:var(--text2);font-size:18px;font-weight:300;align-self:flex-end;padding-bottom:8px;">+</div>
+        <div>
+          <div style="font-size:11px;color:var(--text2);font-weight:600;margin-bottom:6px;">International BW</div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <input id="th-bw-intl" type="number" min="0" max="100000" value="0" placeholder="0"
+              oninput="syncTotalBW()"
+              style="width:80px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:14px;font-weight:700;">
+            <span style="color:var(--text2);font-size:12px;">Mbps</span>
+          </div>
+        </div>
+        <div style="color:var(--text2);font-size:18px;font-weight:300;align-self:flex-end;padding-bottom:8px;">=</div>
+        <div>
+          <div style="font-size:11px;color:var(--cyan);font-weight:600;margin-bottom:6px;">Total BW</div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <input id="th-circuit-bw" type="number" min="1" max="100000" value="100" placeholder="e.g. 100"
+              oninput="applySubnetCalc()"
+              style="width:80px;background:var(--bg3);border:1px solid var(--cyan);color:var(--cyan);border-radius:6px;padding:6px 10px;font-size:14px;font-weight:700;">
+            <span style="color:var(--text2);font-size:12px;">Mbps</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Prefix rows -->
+      <div style="font-size:11px;color:var(--text2);font-weight:600;margin-bottom:8px;">Network Prefix(es)</div>
+      <div id="th-prefix-rows" style="display:flex;flex-direction:column;gap:7px;margin-bottom:10px;">
+        <!-- rows injected by addPrefixRow() -->
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:14px;">
+        <button class="btn btn-sm" onclick="addPrefixRow()" style="font-size:11px;padding:4px 12px;">+ Add Prefix</button>
+        <button class="btn btn-sm" onclick="applySubnetCalc()" style="padding:6px 18px;background:var(--cyan);border-color:var(--cyan);color:#000;font-weight:700;">Calculate</button>
+      </div>
+
+      <!-- Result display -->
+      <div id="th-subnet-result" style="display:none;">
+        <!-- Info row -->
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+          <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 14px;flex:1;min-width:110px;">
+            <div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;">Customer BW</div>
+            <div id="th-net-bw-label" style="font-size:15px;font-weight:700;color:var(--cyan);"></div>
+            <div style="font-size:10px;color:var(--text2);margin-top:2px;" id="th-net-bw-sub">full bandwidth</div>
+          </div>
+          <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 14px;flex:1;min-width:110px;">
+            <div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;">Total Assignable IPs</div>
+            <div id="th-usable-label" style="font-size:15px;font-weight:700;color:var(--text);"></div>
+            <div style="font-size:10px;color:var(--text2);margin-top:2px;">across all prefixes, excl. net/bcast/gw</div>
+          </div>
+        </div>
+        <!-- Per-prefix breakdown -->
+        <div id="th-prefix-breakdown" style="margin-bottom:12px;"></div>
+        <!-- Host BW options -->
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:10px;">
+          <div style="font-size:10px;color:var(--text2);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;">Per-Host Bandwidth Options — pick one:</div>
+          <div style="display:flex;flex-direction:column;gap:7px;" id="th-host-options"></div>
+        </div>
+        <!-- Apply network button -->
+        <button class="btn btn-sm" id="th-apply-net-btn" onclick="applyNetworkBW()"
+          style="font-size:11px;padding:5px 12px;background:var(--cyan);border-color:var(--cyan);color:#000;width:100%;">
+          ↑ Use Full BW for Network Detection
+        </button>
+      </div>
+
     </div>
 
     <!-- Controls card -->
@@ -849,7 +938,7 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
             </label>
             <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);">
               <input type="radio" name="th-scope" value="network" onchange="recalcThresholds()">
-              <span style="color:var(--text);font-size:13px;">Network <span style="color:var(--text2);font-size:11px;">/24</span></span>
+              <span style="color:var(--text);font-size:13px;">Network</span>
             </label>
           </div>
         </div>
@@ -985,18 +1074,19 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
   <div class="card" id="traffic-upload-card">
     <h2>Traffic CSV Analysis</h2>
     <p style="font-size:13px;color:var(--text2);margin-bottom:20px;">
-      Upload a NetFlow/anti-DDoS CSV export. The analyzer will auto-detect the attack type, extract top sources by volume, and identify the targeted IP and ports.
+      Upload a NetFlow/anti-DDoS CSV export. The analyzer will auto-detect the attack type, extract top sources by volume, and identify the targeted IP and ports. You can select or drop multiple CSV files at once — they'll be merged into a single dataset before analysis.
     </p>
     <div class="traffic-upload-zone" id="traffic-drop-zone"
          onclick="document.getElementById('traffic-csv-input').click()"
          ondragover="event.preventDefault();this.classList.add('drag')"
          ondragleave="this.classList.remove('drag')"
          ondrop="handleTrafficDrop(event)">
-      <input type="file" id="traffic-csv-input" accept=".csv,.txt" onchange="handleTrafficFile(this.files[0])"/>
+      <input type="file" id="traffic-csv-input" accept=".csv,.txt" multiple onchange="handleTrafficFiles(this.files)"/>
       <div style="font-size:40px;margin-bottom:12px;">📡</div>
-      <div style="font-size:15px;font-weight:500;margin-bottom:6px;">Drop CSV or click to upload</div>
-      <div style="font-size:12px;color:var(--text2);">Supports NetFlow exports from anti-DDoS platforms (Arbor, Kentik, Radware, etc.)</div>
+      <div style="font-size:15px;font-weight:500;margin-bottom:6px;">Drop CSV(s) or click to upload</div>
+      <div style="font-size:12px;color:var(--text2);">Supports NetFlow exports from anti-DDoS platforms (Arbor, Kentik, Radware, etc.) — multiple files will be merged</div>
     </div>
+    <div id="traffic-upload-files" style="display:none;margin-top:14px;"></div>
     <div id="traffic-upload-status" style="display:none;margin-top:14px;font-size:13px;color:var(--text2);text-align:center;"></div>
   </div>
 
@@ -1097,10 +1187,30 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
               <input type="radio" name="tv-inv-mode" id="tv-inv-mode-all" value="all" onchange="updateInvModeUI()">
               <span id="tv-inv-all-label" style="color:var(--text2);">All unique IPs</span>
             </label>
+            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;">
+              <input type="radio" name="tv-inv-mode" id="tv-inv-mode-specific" value="specific" onchange="updateInvModeUI()">
+              <span style="color:var(--text2);">Specific IPs</span>
+              <span id="tv-inv-specific-count-badge" style="display:none;background:var(--cyan);color:#000;font-size:10px;font-weight:800;padding:1px 6px;border-radius:10px;"></span>
+            </label>
             <button class="btn btn-sm" id="tv-inv-run-btn" onclick="rerunAutoInvestigation()"
                     style="padding:4px 12px;font-size:12px;">▶ Run</button>
           </div>
         </div>
+
+        <!-- Specific-IP picker (shown only when "Specific IPs" mode is selected) -->
+        <div id="tv-inv-specific-picker" style="display:none;background:var(--card-alt,#161b22);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:12px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px;">
+            <div style="font-size:11px;color:var(--text2);font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Select source IPs to investigate</div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input id="tv-inv-specific-search" type="text" placeholder="Search IP…" oninput="renderTrafficInvSpecificPicker()"
+                style="background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 8px;font-size:11px;width:140px;">
+              <button class="btn btn-secondary btn-sm" style="font-size:10px;padding:2px 8px;" onclick="selectAllTrafficInvSpecific()">Select All</button>
+              <button class="btn btn-secondary btn-sm" style="font-size:10px;padding:2px 8px;" onclick="clearTrafficInvSpecific()">Clear</button>
+            </div>
+          </div>
+          <div id="tv-inv-specific-list" style="max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;"></div>
+        </div>
+
         <div id="tv-inv-status" style="font-size:13px;color:var(--text2);margin-bottom:12px;"></div>
         <div id="tv-inv-progress-bar" style="height:6px;background:var(--border);border-radius:3px;margin-bottom:16px;display:none;">
           <div id="tv-inv-bar-fill" style="height:100%;background:var(--cyan);border-radius:3px;width:0%;transition:width 0.3s;"></div>
@@ -1199,6 +1309,7 @@ var trafficInvVerdictFilter  = 'ALL';
 var trafficInvScoreMin       = 0;
 var trafficInvScoreMax       = 100;
 var trafficInvSelected       = {};  // { ip: true } for checkbox selection
+var trafficInvSpecificSelected = {}; // { ip: true } chosen as investigation SOURCE when mode="specific"
 var trafficInvSearchQuery     = '';  // IP search filter
 var trafficInvTop10Filter     = false;  // show only top-10-by-bytes IPs
 var trafficInvTop10Set        = {};  // set of top-10 IPs by bytes
@@ -1273,16 +1384,65 @@ function clearAll() {
 
 // ── Active sources selector ───────────────────────────────────────
 function getActiveSources() {
-  return Array.from(document.querySelectorAll('.src-toggle input:checked'))
+  return Array.from(document.querySelectorAll('#ip-sources-toggle input:checked'))
     .map(function(cb){ return cb.closest('.src-toggle').dataset.src; });
 }
 function updateSourcesSummary() {
-  var active = getActiveSources();
-  var total  = document.querySelectorAll('.src-toggle').length;
+  var activeIP   = getActiveSources();
+  var activeHash = getHashSources();
+  var totalIP    = document.querySelectorAll('#ip-sources-toggle .src-toggle').length;
+  var totalHash  = document.querySelectorAll('#hash-sources-toggle .src-toggle').length;
+  var active = activeIP.length + activeHash.length;
+  var total  = totalIP + totalHash;
   var el     = document.getElementById('sources-summary');
-  if (active.length === total) { el.textContent = ''; }
-  else if (active.length === 0) { el.innerHTML = '<span style="color:var(--red);">⚠ No sources selected</span>'; }
-  else { el.innerHTML = '<span style="color:var(--cyan);">' + active.length + ' of ' + total + ' active</span>'; }
+  if (active === total) { el.textContent = ''; }
+  else if (active === 0) { el.innerHTML = '<span style="color:var(--red);">⚠ No sources selected</span>'; }
+  else { el.innerHTML = '<span style="color:var(--cyan);">' + active + ' of ' + total + ' active</span>'; }
+}
+
+// Source preset buttons: All Sources / IP Only / Hash Only / Quick Scan / Custom
+function setPreset(name, btn) {
+  document.querySelectorAll('.src-preset').forEach(function(b){ b.classList.remove('active'); });
+  if (btn) btn.classList.add('active');
+
+  var ipBoxes   = document.querySelectorAll('#ip-sources-toggle input[type=checkbox]');
+  var hashBoxes = document.querySelectorAll('#hash-sources-toggle input[type=checkbox]');
+  var panel     = document.getElementById('custom-sources');
+
+  function setAll(boxes, val) { boxes.forEach(function(cb){ cb.checked = val; }); }
+  function setBySrc(boxes, allowed) {
+    boxes.forEach(function(cb){
+      cb.checked = allowed.indexOf(cb.closest('.src-toggle').dataset.src) !== -1;
+    });
+  }
+
+  switch (name) {
+    case 'all':
+      setAll(ipBoxes, true);
+      setAll(hashBoxes, true);
+      panel.style.display = 'none';
+      break;
+    case 'ip':
+      setAll(ipBoxes, true);
+      setAll(hashBoxes, false);
+      panel.style.display = 'none';
+      break;
+    case 'hash':
+      setAll(ipBoxes, false);
+      setAll(hashBoxes, true);
+      panel.style.display = 'none';
+      break;
+    case 'quick':
+      // Fastest, highest-signal sources only
+      setBySrc(ipBoxes, ['abuseipdb', 'virustotal', 'otx']);
+      setBySrc(hashBoxes, ['virustotal', 'otx']);
+      panel.style.display = 'none';
+      break;
+    case 'custom':
+      panel.style.display = (panel.style.display === 'none' || !panel.style.display) ? 'block' : 'none';
+      break;
+  }
+  updateSourcesSummary();
 }
 
 // ── Investigate (SSE streaming) ───────────────────────────────────
@@ -1815,15 +1975,48 @@ function loadSettings() {
   var grid = document.getElementById('settings-grid');
   grid.innerHTML = '<div style="color:var(--text2);font-size:13px;">Loading...</div>';
   fetch('/api/config').then(function(r){ return r.json(); }).then(function(data) {
-    var configured = data.keys_configured || [];
+    var configured  = data.keys_configured || [];
+    var primaryMasked = data.config || {};
+    var backupKeys  = data.backup_keys || {};
+    var keyCounts   = data.key_counts || {};
     grid.innerHTML = API_KEYS.map(function(k) {
-      return '<div class="setting-row">'
+      var count = keyCounts[k.key] || 0;
+      var countBadge = count > 1
+        ? '<span style="margin-left:6px;font-size:10px;color:var(--cyan);background:rgba(88,166,255,.12);border-radius:10px;padding:2px 7px;">' + count + ' keys active</span>'
+        : '';
+      var backups = backupKeys[k.key] || [];
+      var chips = backups.map(function(masked, i) {
+        return '<div class="backup-chip">'
+          + '<span class="backup-label">🔑 Backup #' + (i + 1) + ': <span id="bkp-' + k.key + '-' + i + '">' + masked + '</span></span>'
+          + '<span style="display:flex;gap:2px;">'
+          + '<button title="Show real key" onclick="revealBackupKey(\'' + k.key + '\',' + i + ',this)">👁</button>'
+          + '<button title="Remove this backup key" onclick="removeBackupKey(\'' + k.key + '\',' + i + ',this)">✕</button>'
+          + '</span>'
+          + '</div>';
+      }).join('');
+      var currentPrimary = primaryMasked[k.key] || '';
+      var placeholder = currentPrimary ? 'Leave blank to keep current key, or paste a new one to replace it' : 'Enter primary API key';
+      var hintText = k.hint + (currentPrimary
+        ? '<br><span style="color:var(--cyan);">current: <span id="cur-' + k.key + '" class="key-preview">' + currentPrimary + '</span> '
+          + '<button type="button" title="Show real key" style="background:none;border:none;color:var(--cyan);cursor:pointer;font-size:11px;padding:0 2px;vertical-align:middle;" onclick="revealPrimaryKey(\'' + k.key + '\',this)">👁</button></span>'
+        : '');
+      return '<div class="key-group">'
+        + '<div class="setting-row">'
         + '<div><div style="display:flex;align-items:center;gap:8px;">'
         + '<div class="key-status' + (configured.indexOf(k.key) >= 0 ? ' ok' : '') + '"></div>'
-        + '<label>' + k.label + '</label></div>'
-        + '<div class="hint">' + k.hint + '</div></div>'
-        + '<input type="password" id="key-' + k.key + '" placeholder="Enter API key (blank = keep current)" autocomplete="off"/>'
+        + '<label>' + k.label + '</label>' + countBadge + '</div>'
+        + '<div class="hint">' + hintText + '</div></div>'
+        + '<input type="password" id="key-' + k.key + '" placeholder="' + placeholder + '" autocomplete="off"/>'
         + '<button class="btn btn-secondary btn-sm" onclick="toggleShow(\'key-' + k.key + '\')">👁</button>'
+        + '</div>'
+        + '<div class="backup-keys-section">'
+        + (chips || '<div class="backup-hint">No backup keys yet — add one below to auto-failover when the primary key hits its rate limit.</div>')
+        + '<div class="backup-add-row">'
+        + '<input type="password" id="newbackup-' + k.key + '" placeholder="Add a backup API key (e.g. from a second account)" autocomplete="off"/>'
+        + '<button class="btn btn-secondary btn-sm" onclick="toggleShow(\'newbackup-' + k.key + '\')">👁</button>'
+        + '<button class="btn btn-secondary btn-sm" onclick="addBackupKey(\'' + k.key + '\')">+ Add backup key</button>'
+        + '</div>'
+        + '</div>'
         + '</div>';
     }).join('');
   }).catch(function(e) {
@@ -1834,6 +2027,95 @@ function loadSettings() {
 function toggleShow(id) {
   var el = document.getElementById(id);
   el.type = el.type === 'password' ? 'text' : 'password';
+}
+
+function revealPrimaryKey(field, btn) {
+  var span = document.getElementById('cur-' + field);
+  if (!span) return;
+  if (span.dataset.revealed === '1') {
+    span.textContent = span.dataset.masked;
+    span.dataset.revealed = '0';
+    btn.textContent = '👁';
+    return;
+  }
+  fetch('/api/config/reveal?field=' + encodeURIComponent(field))
+    .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d }; }); })
+    .then(function(res) {
+      if (!res.ok) { showSettingsAlert(false, res.d.error || 'Could not reveal key'); return; }
+      span.dataset.masked = span.textContent;
+      span.textContent = res.d.key;
+      span.dataset.revealed = '1';
+      btn.textContent = '🙈';
+    })
+    .catch(function(e) { showSettingsAlert(false, 'Connection error: ' + e.message); });
+}
+
+function revealBackupKey(field, index, btn) {
+  var span = document.getElementById('bkp-' + field + '-' + index);
+  if (!span) return;
+  if (span.dataset.revealed === '1') {
+    span.textContent = span.dataset.masked;
+    span.dataset.revealed = '0';
+    btn.textContent = '👁';
+    return;
+  }
+  fetch('/api/config/reveal?field=' + encodeURIComponent(field) + '&index=' + index)
+    .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d }; }); })
+    .then(function(res) {
+      if (!res.ok) { showSettingsAlert(false, res.d.error || 'Could not reveal key'); return; }
+      span.dataset.masked = span.textContent;
+      span.textContent = res.d.key;
+      span.dataset.revealed = '1';
+      btn.textContent = '🙈';
+    })
+    .catch(function(e) { showSettingsAlert(false, 'Connection error: ' + e.message); });
+}
+
+function showSettingsAlert(ok, msg) {
+  var alertEl = document.getElementById('settings-alert');
+  alertEl.style.display = 'block';
+  alertEl.className = 'alert ' + (ok ? 'success' : 'error');
+  alertEl.textContent = msg;
+  setTimeout(function(){ alertEl.style.display = 'none'; }, 4000);
+}
+
+function addBackupKey(field) {
+  var input = document.getElementById('newbackup-' + field);
+  var key = input.value.trim();
+  if (!key) { showSettingsAlert(false, 'Enter a key before adding it as a backup.'); return; }
+  fetch('/api/config/backup-key', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ field: field, key: key })
+  }).then(function(res) {
+    return res.json().then(function(data) {
+      if (res.ok) {
+        showSettingsAlert(true, '✓ Backup key added (' + data.key_count + ' key' + (data.key_count === 1 ? '' : 's') + ' now active for this source)');
+        loadSettings();
+      } else {
+        showSettingsAlert(false, data.error || 'Could not add backup key');
+      }
+    });
+  }).catch(function(e) {
+    showSettingsAlert(false, 'Connection error: ' + e.message);
+  });
+}
+
+function removeBackupKey(field, index, btn) {
+  fetch('/api/config/backup-key', {
+    method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ field: field, index: index })
+  }).then(function(res) {
+    return res.json().then(function(data) {
+      if (res.ok) {
+        showSettingsAlert(true, '✓ Backup key removed');
+        loadSettings();
+      } else {
+        showSettingsAlert(false, data.error || 'Could not remove backup key');
+      }
+    });
+  }).catch(function(e) {
+    showSettingsAlert(false, 'Connection error: ' + e.message);
+  });
 }
 
 function saveSettings() {
@@ -2166,25 +2448,77 @@ function goToHashResults() {
 }
 
 // ── Traffic Analysis ────────────────────────────────────────────
+var trafficPendingFiles = [];  // staged File objects awaiting merge & analysis
+
 function handleTrafficDrop(e) {
   e.preventDefault();
   document.getElementById('traffic-drop-zone').classList.remove('drag');
-  var file = e.dataTransfer.files[0];
-  if (file) handleTrafficFile(file);
+  handleTrafficFiles(e.dataTransfer.files);
 }
 
-function handleTrafficFile(file) {
-  if (!file) return;
+function handleTrafficFiles(fileList) {
+  if (!fileList || !fileList.length) return;
+  Array.prototype.forEach.call(fileList, function(file) {
+    var dup = trafficPendingFiles.some(function(f){ return f.name === file.name && f.size === file.size; });
+    if (!dup) trafficPendingFiles.push(file);
+  });
+  document.getElementById('traffic-csv-input').value = ''; // allow re-selecting the same file later
+  renderTrafficPendingFiles();
+}
+
+function removeTrafficPendingFile(idx) {
+  trafficPendingFiles.splice(idx, 1);
+  renderTrafficPendingFiles();
+}
+
+function clearTrafficPendingFiles() {
+  trafficPendingFiles = [];
+  renderTrafficPendingFiles();
+}
+
+function renderTrafficPendingFiles() {
+  var box = document.getElementById('traffic-upload-files');
+  if (!trafficPendingFiles.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  box.style.display = 'block';
+  var totalSize = trafficPendingFiles.reduce(function(s,f){ return s + f.size; }, 0);
+  var rows = trafficPendingFiles.map(function(f, i) {
+    return '<div style="display:flex;align-items:center;gap:10px;padding:6px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;margin-bottom:6px;">'
+      + '<span style="font-size:13px;">📄</span>'
+      + '<span style="flex:1;font-size:12px;font-family:monospace;color:var(--text);">'+esc(f.name)+'</span>'
+      + '<span style="font-size:11px;color:var(--text2);">'+(f.size/1024).toFixed(1)+' KB</span>'
+      + '<button onclick="removeTrafficPendingFile('+i+')" style="background:none;border:none;color:var(--text2);font-size:14px;cursor:pointer;line-height:1;" title="Remove">✕</button>'
+      + '</div>';
+  }).join('');
+  box.innerHTML = '<div style="font-size:11px;color:var(--text2);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">'
+    + trafficPendingFiles.length + ' file(s) staged — ' + (totalSize/1024).toFixed(1) + ' KB total</div>'
+    + rows
+    + '<div style="display:flex;gap:8px;margin-top:8px;">'
+    + '<button class="btn btn-sm" onclick="analyzeTrafficMerged()" style="background:var(--cyan);border-color:var(--cyan);color:#000;font-weight:700;flex:1;">▶ Merge &amp; Analyze ('+trafficPendingFiles.length+' file'+(trafficPendingFiles.length>1?'s':'')+')</button>'
+    + '<button class="btn btn-secondary btn-sm" onclick="clearTrafficPendingFiles()">Clear</button>'
+    + '</div>';
+}
+
+function analyzeTrafficMerged() {
+  if (!trafficPendingFiles.length) return;
   var status = document.getElementById('traffic-upload-status');
   status.style.display = 'block';
-  status.textContent = 'Analyzing ' + file.name + ' (' + (file.size/1024).toFixed(1) + ' KB)...';
+  status.style.color = 'var(--text2)';
+  var n = trafficPendingFiles.length;
+  var totalKB = (trafficPendingFiles.reduce(function(s,f){ return s+f.size; },0)/1024).toFixed(1);
+  status.textContent = n > 1
+    ? 'Merging ' + n + ' files (' + totalKB + ' KB) and analyzing...'
+    : 'Analyzing ' + trafficPendingFiles[0].name + ' (' + totalKB + ' KB)...';
+
   var fd = new FormData();
-  fd.append('csv', file);
+  trafficPendingFiles.forEach(function(f){ fd.append('csv', f); });
+
   fetch('/api/analyze/traffic', { method:'POST', body: fd })
     .then(function(res){ return res.json(); })
     .then(function(data){
       if (data.error) { status.style.color='var(--red)'; status.textContent='Error: '+data.error; return; }
       status.style.display='none';
+      trafficPendingFiles = [];
+      renderTrafficPendingFiles();
       renderTrafficResults(data);
     })
     .catch(function(e){ status.style.color='var(--red)'; status.textContent='Request failed: '+e.message; });
@@ -2201,7 +2535,9 @@ function renderTrafficResults(d) {
   bannerEl.className = 'verdict-banner ' + (d.verdict==='ATTACK'?'attack': d.verdict==='SUSPICIOUS'?'suspicious':'clean');
   document.getElementById('tv-icon').textContent  = d.verdict==='ATTACK'?'🚨': d.verdict==='SUSPICIOUS'?'⚠️':'✅';
   document.getElementById('tv-label').textContent = d.verdict + ' — Confidence: ' + d.confidence;
-  document.getElementById('tv-sub').textContent   = d.indicators.length + ' indicator(s) detected  |  Attack score: ' + d.attack_score + '/100';
+  var mergedNote = (d.merged_files && d.merged_files.length > 1)
+    ? '  |  Merged from ' + d.file_count + ' files (' + d.merged_files.join(', ') + ')' : '';
+  document.getElementById('tv-sub').textContent   = d.indicators.length + ' indicator(s) detected  |  Attack score: ' + d.attack_score + '/100' + mergedNote;
   document.getElementById('tv-score').textContent = 'Score: ' + d.attack_score;
   // Store base values directly from backend — used by recalcTrafficScore()
   trafficBaseScore      = d.attack_score;
@@ -2380,16 +2716,13 @@ function renderTrafficResults(d) {
   var allLabel = document.getElementById('tv-inv-all-label');
   if (allLabel) allLabel.textContent = 'All unique IPs (' + invPool.length + ')';
 
-  // Auto-investigate: use current mode selection (default Top 10)
-  var isAll = document.getElementById('tv-inv-mode-all') && document.getElementById('tv-inv-mode-all').checked;
-  var ipsToInv;
-  if (isAll) {
-    ipsToInv = invPool.map(function(r){ return r.ip; });
-  } else {
-    var invCount = parseInt(document.getElementById('tv-inv-count').value, 10) || 10;
-    invCount = Math.max(1, Math.min(invCount, invPool.length));
-    ipsToInv = invPool.slice(0, invCount).map(function(r){ return r.ip; });
-  }
+  // Reset specific-IP picker for the new dataset, then auto-investigate using current mode selection (default Top 10)
+  trafficInvSpecificSelected = {};
+  var specificPicker = document.getElementById('tv-inv-specific-picker');
+  if (specificPicker) specificPicker.style.display = 'none';
+  document.getElementById('tv-inv-mode-top').checked = true;
+
+  var ipsToInv = getInvIPsFromMode(invPool);
   // Build top-10 set for badge display
   trafficInvTop10Set = {};
   (d.all_sources_bytes || d.top10_bytes || []).slice(0,10).forEach(function(r){ trafficInvTop10Set[r.ip] = true; });
@@ -2479,24 +2812,95 @@ function exportTrafficPDF() {
   });
 }
 
+function getInvMode() {
+  var checked = document.querySelector('input[name="tv-inv-mode"]:checked');
+  return checked ? checked.value : 'top';
+}
+
 function updateInvModeUI() {
-  var isAll = document.getElementById('tv-inv-mode-all').checked;
-  document.getElementById('tv-inv-count').disabled = isAll;
-  document.getElementById('tv-inv-count').style.opacity = isAll ? '0.4' : '1';
+  var mode = getInvMode();
+  document.getElementById('tv-inv-count').disabled = mode !== 'top';
+  document.getElementById('tv-inv-count').style.opacity = mode !== 'top' ? '0.4' : '1';
+  var picker = document.getElementById('tv-inv-specific-picker');
+  if (mode === 'specific') {
+    picker.style.display = 'block';
+    renderTrafficInvSpecificPicker();
+  } else {
+    picker.style.display = 'none';
+  }
+}
+
+function renderTrafficInvSpecificPicker() {
+  if (!trafficAnalysisData) return;
+  var pool = trafficAnalysisData.all_sources_bytes || trafficAnalysisData.top10_bytes || [];
+  var q = (document.getElementById('tv-inv-specific-search').value || '').trim().toLowerCase();
+  var filtered = q ? pool.filter(function(r){ return r.ip.toLowerCase().indexOf(q) >= 0; }) : pool;
+  var list = document.getElementById('tv-inv-specific-list');
+  list.innerHTML = filtered.length ? filtered.map(function(r){
+    var checked = trafficInvSpecificSelected[r.ip] ? 'checked' : '';
+    return '<label style="display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:5px;cursor:pointer;font-size:12px;">'
+      + '<input type="checkbox" '+checked+' onchange="toggleTrafficInvSpecific(\''+r.ip+'\', this.checked)">'
+      + '<span style="font-family:monospace;color:var(--text);">'+esc(r.ip)+'</span>'
+      + '<span style="color:var(--text2);margin-left:auto;">'+r.bytes_fmt+'</span>'
+      + '</label>';
+  }).join('') : '<div style="color:var(--text2);font-size:12px;padding:6px;">No matching IPs.</div>';
+  updateTrafficInvSpecificBadge();
+}
+
+function toggleTrafficInvSpecific(ip, checked) {
+  if (checked) trafficInvSpecificSelected[ip] = true;
+  else delete trafficInvSpecificSelected[ip];
+  updateTrafficInvSpecificBadge();
+}
+
+function selectAllTrafficInvSpecific() {
+  if (!trafficAnalysisData) return;
+  var q = (document.getElementById('tv-inv-specific-search').value || '').trim().toLowerCase();
+  var pool = trafficAnalysisData.all_sources_bytes || trafficAnalysisData.top10_bytes || [];
+  var filtered = q ? pool.filter(function(r){ return r.ip.toLowerCase().indexOf(q) >= 0; }) : pool;
+  filtered.forEach(function(r){ trafficInvSpecificSelected[r.ip] = true; });
+  renderTrafficInvSpecificPicker();
+}
+
+function clearTrafficInvSpecific() {
+  trafficInvSpecificSelected = {};
+  renderTrafficInvSpecificPicker();
+}
+
+function updateTrafficInvSpecificBadge() {
+  var n = Object.keys(trafficInvSpecificSelected).length;
+  var badge = document.getElementById('tv-inv-specific-count-badge');
+  if (!badge) return;
+  if (n > 0) { badge.style.display = 'inline-block'; badge.textContent = n; }
+  else badge.style.display = 'none';
+}
+
+// Resolves the IPs to investigate based on the selected mode (top / all / specific)
+function getInvIPsFromMode(pool) {
+  var mode = getInvMode();
+  if (mode === 'specific') {
+    var poolSet = {};
+    pool.forEach(function(r){ poolSet[r.ip] = true; });
+    return Object.keys(trafficInvSpecificSelected).filter(function(ip){ return poolSet[ip]; });
+  }
+  if (mode === 'all') {
+    return pool.map(function(r){ return r.ip; });
+  }
+  var invCount = parseInt(document.getElementById('tv-inv-count').value, 10) || 10;
+  invCount = Math.max(1, Math.min(invCount, pool.length));
+  return pool.slice(0, invCount).map(function(r){ return r.ip; });
 }
 
 function rerunAutoInvestigation() {
   if (!trafficAnalysisData) return;
   var pool = trafficAnalysisData.all_sources_bytes || trafficAnalysisData.top10_bytes || [];
   if (!pool.length) return;
-  var isAll = document.getElementById('tv-inv-mode-all').checked;
-  var ips;
-  if (isAll) {
-    ips = pool.map(function(r){ return r.ip; });
-  } else {
-    var invCount = parseInt(document.getElementById('tv-inv-count').value, 10) || 10;
-    invCount = Math.max(1, Math.min(invCount, pool.length));
-    ips = pool.slice(0, invCount).map(function(r){ return r.ip; });
+  var ips = getInvIPsFromMode(pool);
+  if (getInvMode() === 'specific' && !ips.length) {
+    var status = document.getElementById('tv-inv-status');
+    status.style.color = 'var(--yellow)';
+    status.textContent = 'Select at least one IP from the list above before running.';
+    return;
   }
   // Abort any in-progress investigation
   if (trafficInvAbortController) { trafficInvAbortController.abort(); trafficInvAbortController = null; }
@@ -2987,7 +3391,7 @@ function recalcThresholds() {
     +'<div style="font-size:18px;font-weight:700;color:var(--green);">'+fmtBps(totTh.bpsHigh)+'</div></div>'
     +'<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;flex:1;min-width:140px;">'
     +'<div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Scope</div>'
-    +'<div style="font-size:18px;font-weight:700;color:var(--text);">'+(scope==='host'?'Host /32':'Network /24')+'</div></div>';
+    +'<div style="font-size:18px;font-weight:700;color:var(--text);">'+(scope==='host'?'Host /32':'Network')+'</div></div>';
 
   // Rapid mode multiplier note
   var rapidNote = (mode === 'rapid')
@@ -3054,8 +3458,206 @@ function exportThresholdCSV() {
   URL.revokeObjectURL(a.href);
 }
 
+// ── Subnet auto-calculator ────────────────────────────────
+var _subnetNetBW  = null;
+var _subnetHostBW = null;
+
+// ── Subnet calculator helpers ─────────────────────────────────────────────
+var _prefixRowCount = 0;
+
+var PREFIX_OPTIONS = [
+  [32,'Single host (/32)'],
+  [31,'2 IPs — P2P (/31)'],
+  [30,'4 IPs, 2 usable (/30)'],
+  [29,'8 IPs, 6 usable (/29)'],
+  [28,'16 IPs, 14 usable (/28)'],
+  [27,'32 IPs, 30 usable (/27)'],
+  [26,'64 IPs, 62 usable (/26)'],
+  [25,'128 IPs, 126 usable (/25)'],
+  [24,'256 IPs, 254 usable (/24)'],
+  [23,'512 IPs, 510 usable (/23)'],
+  [22,'1024 IPs, 1022 usable (/22)'],
+  [21,'2048 IPs, 2046 usable (/21)'],
+  [20,'4096 IPs, 4094 usable (/20)'],
+  [19,'8192 IPs, 8190 usable (/19)'],
+  [18,'16384 IPs (/18)'],
+  [16,'65536 IPs (/16)'],
+];
+
+function prefixSelectHTML(id, defaultVal) {
+  return '<select id="'+id+'" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 10px;font-size:13px;font-weight:700;cursor:pointer;">'
+    + PREFIX_OPTIONS.map(function(p){
+        return '<option value="'+p[0]+'"'+(p[0]===defaultVal?' selected':'')+'>'+p[1]+'</option>';
+      }).join('')
+    + '</select>';
+}
+
+function addPrefixRow(defaultPrefix) {
+  _prefixRowCount++;
+  var id = _prefixRowCount;
+  defaultPrefix = defaultPrefix || 28;
+  var row = document.createElement('div');
+  row.id = 'th-prow-' + id;
+  row.style.cssText = 'display:flex;align-items:center;gap:8px;';
+  row.innerHTML = prefixSelectHTML('th-psel-'+id, defaultPrefix)
+    + '<input id="th-pcidr-'+id+'" type="text" placeholder="CIDR (optional)" '
+    + 'style="width:160px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 10px;font-size:12px;" '
+    + 'title="Paste CIDR to auto-detect prefix (e.g. 139.255.197.184/29)">'
+    + '<button onclick="removePrefixRow('+id+')" style="background:none;border:none;color:var(--text2);font-size:16px;cursor:pointer;line-height:1;" title="Remove">✕</button>';
+  document.getElementById('th-prefix-rows').appendChild(row);
+
+  // Auto-parse prefix from CIDR input
+  document.getElementById('th-pcidr-'+id).addEventListener('blur', function(){
+    var v = this.value.trim();
+    var m = v.match(/\/(\d+)$/);
+    if (m) {
+      var p = parseInt(m[1]);
+      document.getElementById('th-psel-'+id).value = p;
+    }
+    applySubnetCalc();
+  });
+}
+
+function removePrefixRow(id) {
+  var el = document.getElementById('th-prow-'+id);
+  if (el) el.remove();
+  applySubnetCalc();
+}
+
+function syncTotalBW() {
+  var dom  = parseFloat(document.getElementById('th-bw-domestic').value) || 0;
+  var intl = parseFloat(document.getElementById('th-bw-intl').value)     || 0;
+  var total = dom + intl;
+  if (total > 0) {
+    document.getElementById('th-circuit-bw').value = total;
+    applySubnetCalc();
+  }
+}
+
+function usableHosts(prefix) {
+  prefix = parseInt(prefix);
+  if (prefix >= 32) return 1;
+  if (prefix === 31) return 2;
+  return Math.pow(2, 32 - prefix) - 2;
+}
+
+function assignableHosts(prefix) {
+  prefix = parseInt(prefix);
+  if (prefix >= 32) return 1;
+  if (prefix === 31) return 2;
+  return Math.max(Math.pow(2, 32 - prefix) - 2 - 1, 1);  // subtract gateway
+}
+
+function applySubnetCalc() {
+  var circuitBW = parseFloat(document.getElementById('th-circuit-bw').value) || 0;
+  if (circuitBW <= 0) return;
+
+  // Collect all prefix rows
+  var rows = document.querySelectorAll('[id^="th-prow-"]');
+  if (!rows.length) return;
+
+  var prefixList = [];
+  rows.forEach(function(row) {
+    var idNum = row.id.replace('th-prow-','');
+    var sel   = document.getElementById('th-psel-'+idNum);
+    var cidr  = (document.getElementById('th-pcidr-'+idNum).value||'').trim();
+    if (!sel) return;
+    var p = parseInt(sel.value);
+    var label = cidr || ('/'+p);
+    prefixList.push({ prefix: p, label: label, assignable: assignableHosts(p), usable: usableHosts(p) });
+  });
+
+  var totalAssignable = prefixList.reduce(function(s, r){ return s + r.assignable; }, 0);
+  _subnetNetBW = circuitBW;
+
+  var equalShare = parseFloat((circuitBW / totalAssignable).toFixed(2));
+  var withBurst  = parseFloat(Math.min(circuitBW, circuitBW / totalAssignable * 2).toFixed(2));
+  var pipePct30  = parseFloat((circuitBW * 0.30).toFixed(2));
+  var pipePct50  = parseFloat((circuitBW * 0.50).toFixed(2));
+  _subnetHostBW  = equalShare;
+
+  // Determine network scope label
+  var uniquePrefixes = prefixList.map(function(r){ return r.prefix; }).filter(function(v,i,a){ return a.indexOf(v)===i; });
+  var scopeLabel = uniquePrefixes.length === 1 ? '/' + uniquePrefixes[0] : 'multi-prefix';
+
+  document.getElementById('th-net-bw-label').textContent = circuitBW + ' Mbps';
+  document.getElementById('th-net-bw-sub').textContent   = 'network scope (' + scopeLabel + ')';
+  document.getElementById('th-usable-label').textContent = totalAssignable + ' IPs';
+  document.getElementById('th-subnet-result').style.display = 'block';
+
+  // Per-prefix breakdown
+  document.getElementById('th-prefix-breakdown').innerHTML = prefixList.length > 1
+    ? '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:0;">'
+      + '<div style="font-size:10px;color:var(--text2);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Prefix Breakdown</div>'
+      + '<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+      + '<tr style="color:var(--text2);"><th style="text-align:left;padding:3px 8px;">Prefix</th>'
+      + '<th style="text-align:right;padding:3px 8px;">Usable</th>'
+      + '<th style="text-align:right;padding:3px 8px;">Assignable</th>'
+      + '<th style="text-align:right;padding:3px 8px;">Equal share</th></tr>'
+      + prefixList.map(function(r){
+          var perHost = parseFloat((circuitBW / totalAssignable).toFixed(2));
+          return '<tr style="border-top:1px solid var(--border);">'
+            + '<td style="padding:4px 8px;color:var(--cyan);font-weight:700;">'+r.label+'</td>'
+            + '<td style="padding:4px 8px;text-align:right;color:var(--text);">'+r.usable+'</td>'
+            + '<td style="padding:4px 8px;text-align:right;color:var(--text);">'+r.assignable+'</td>'
+            + '<td style="padding:4px 8px;text-align:right;color:var(--text);">'+perHost+' Mbps</td>'
+            + '</tr>';
+        }).join('')
+      + '</table></div>'
+    : '';
+
+  // Host BW options
+  var opts = [
+    { bw: equalShare, label: 'Equal share',       desc: circuitBW+' ÷ '+totalAssignable+' hosts = '+equalShare+' Mbps',    color:'var(--cyan)',    tip:'Conservative floor — equal split across all assignable hosts' },
+    { bw: withBurst,  label: 'Equal × 2 (burst)', desc: equalShare+' Mbps × 2 = '+withBurst+' Mbps',                       color:'var(--yellow,#e3b341)', tip:'Headroom for legitimate traffic spikes' },
+    { bw: pipePct30,  label: '30% of total BW',   desc: circuitBW+' × 30% = '+pipePct30+' Mbps',                           color:'#f0883e',        tip:'One host rarely exceeds 30% of the pipe legitimately' },
+    { bw: pipePct50,  label: '50% of total BW',   desc: circuitBW+' × 50% = '+pipePct50+' Mbps',                           color:'var(--green)',   tip:'Generous — for high-traffic servers' },
+  ];
+
+  document.getElementById('th-host-options').innerHTML = opts.map(function(o, i) {
+    return '<div style="display:flex;align-items:center;gap:10px;padding:7px 10px;background:'+(i===0?'rgba(88,166,255,.08)':'var(--bg2,#0d1117)')+';border-radius:6px;border:1px solid '+(i===0?'var(--cyan)':'var(--border)')+';" id="th-opt-'+i+'">'
+      +'<div style="flex:1;">'
+      +'<span style="color:'+o.color+';font-weight:700;font-size:12px;">'+o.bw+' Mbps</span>'
+      +'<span style="color:var(--text2);font-size:11px;margin-left:8px;">'+o.label+'</span>'
+      +'<div style="color:var(--text2);font-size:10px;margin-top:2px;">'+o.desc+' — '+o.tip+'</div>'
+      +'</div>'
+      +'<button class="btn btn-sm" onclick="applyHostBW('+o.bw+', '+i+')" '
+      +'style="font-size:10px;padding:2px 10px;background:'+o.color+';border-color:'+o.color+';color:#000;white-space:nowrap;">Use this</button>'
+      +'</div>';
+  }).join('');
+
+  document.getElementById('th-apply-net-btn').textContent = '↑ Use ' + circuitBW + ' Mbps for Network (' + scopeLabel + ') Detection';
+}
+
+function applyNetworkBW() {
+  if (!_subnetNetBW) return;
+  document.getElementById('th-bw').value = _subnetNetBW;
+  document.getElementById('th-bw-slider').value = Math.min(_subnetNetBW, 10000);
+  document.querySelector('input[name="th-scope"][value="network"]').checked = true;
+  recalcThresholds();
+  document.getElementById('th-bw').style.boxShadow = '0 0 0 2px var(--cyan)';
+  setTimeout(function(){ document.getElementById('th-bw').style.boxShadow = ''; }, 1500);
+}
+
+function applyHostBW(bw, optIdx) {
+  _subnetHostBW = bw;
+  document.querySelectorAll('[id^="th-opt-"]').forEach(function(el, i){
+    el.style.background  = i===optIdx ? 'rgba(88,166,255,.08)' : 'var(--bg2,#0d1117)';
+    el.style.borderColor = i===optIdx ? 'var(--cyan)' : 'var(--border)';
+  });
+  document.getElementById('th-bw').value = bw;
+  document.getElementById('th-bw-slider').value = Math.min(bw, 10000);
+  document.querySelector('input[name="th-scope"][value="host"]').checked = true;
+  recalcThresholds();
+  document.getElementById('th-bw').style.boxShadow = '0 0 0 2px var(--green)';
+  setTimeout(function(){ document.getElementById('th-bw').style.boxShadow = ''; }, 1500);
+}
+
 // Init on page load
-document.addEventListener('DOMContentLoaded', function(){ recalcThresholds(); });
+document.addEventListener('DOMContentLoaded', function(){
+  recalcThresholds();
+  addPrefixRow(28); // seed one default prefix row
+});
 
 fetch('/api/health').then(function(r){ return r.json(); }).then(function(d){
     if (!d.sources_configured) {
