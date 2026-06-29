@@ -2,7 +2,7 @@
 
 A web-based Security Operations Center (SOC) platform for **IP reputation investigation**, **file hash analysis**, **network traffic analysis**, and **DDoS threshold calculation** — powered by multiple threat intelligence sources.
 
-![Python](https://img.shields.io/badge/Python-3.8+-blue?logo=python) ![Flask](https://img.shields.io/badge/Flask-3.0-black?logo=flask) ![License](https://img.shields.io/badge/License-MIT-green)
+![Python](https://img.shields.io/badge/Python-3.8+-blue?logo=python) ![Flask](https://img.shields.io/badge/Flask-3.0-black?logo=flask) ![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white) ![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
@@ -60,12 +60,7 @@ git clone https://github.com/maulana2230/NXG-SOC-Platform.git
 cd NXG-SOC-Platform
 ```
 
-### 2. Install dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 3. Configure API keys
+### 2. Configure API keys
 ```bash
 cp config.example.json config.json
 ```
@@ -89,50 +84,28 @@ Edit `config.json` and fill in your API keys:
 > - GreyNoise → [greynoise.io](https://www.greynoise.io/plans/community)
 > - ThreatFox → [abuse.ch](https://abuse.ch/)
 
-### 4. Run the app
+> Each source also supports an optional **backup API key** (e.g. a second account) configured later from the in-app Settings page — the app automatically fails over to it if the primary key gets rate-limited.
 
-**Windows:**
-```
-START.bat
-```
+### 3. Run the app
 
-**Manual:**
+Pick one of the two options below.
+
+#### Option A — Run with Python directly
 ```bash
+pip install -r requirements.txt
 python app.py
 ```
+**Windows shortcut:** double-click `START.bat` (installs dependencies and starts the server for you).
 
-Then open **http://localhost:5000** in your browser.
+#### Option B — Run with Docker (recommended for servers/deployment)
+Requires [Docker](https://docs.docker.com/get-docker/) and the Docker Compose plugin.
 
----
+```bash
+docker compose up -d --build
+```
 
-## CSV Format for Traffic Analysis
-
-The Traffic Analysis module accepts NetFlow-style CSV files with the following columns:
-
-| Column | Required | Description |
-|--------|----------|-------------|
-| `src_ip` | ✅ | Source IP address |
-| `dst_ip` | ✅ | Destination IP address |
-| `bytes` | ✅ | Bytes transferred |
-| `packets` | ✅ | Packet count |
-| `protocol` | ✅ | Protocol (TCP/UDP/ICMP) |
-| `dst_port` | Optional | Destination port |
-| `tcp_flags` | Optional | TCP flag string |
-| `start_time` | Optional | Flow start timestamp |
-| `end_time` | Optional | Flow end timestamp |
-
-Export this file from your Anti-DDoS dashboard (e.g. FortiDDoS → Event Traffic → Download icon).
-
----
-
-## Security
-
-- API keys are stored locally in `config.json` (excluded from git via `.gitignore`)
-- No data is sent to any third-party except the configured threat intel APIs
-- All investigation runs locally on your machine
-
----
-
-## License
-
-MIT License — free to use, modify, and distribute.
+This builds the image and starts the container in the background, using the `Dockerfile` / `docker-compose.yml` in this repo:
+- Runs the app under **Gunicorn** (not the Flask dev server) as a **non-root** user
+- `config.json` is **bind-mounted** from the host, not baked into the image — your keys stay on disk, never inside an image layer
+- The container's root filesystem is **read-only** and Linux capabilities are dropped (`cap_drop: ALL`)
+- The p
