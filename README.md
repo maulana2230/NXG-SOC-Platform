@@ -21,7 +21,7 @@ A web-based Security Operations Center (SOC) platform for **IP reputation invest
 - Export results to **PDF report**
 
 ### 📡 Traffic Analysis
-- Upload NetFlow/CSV exported from Anti-DDoS appliances (e.g. FortiDDoS)
+- Upload NetFlow/CSV exported from Anti-DDoS appliances (Nexusguard Platform)
 - Automatic detection of attack indicators: SYN Flood, HTTP Flood, Amplification, UDP Flood, etc.
 - Attack score (0–100) with confidence level
 - Auto-investigation of top source IPs using threat intel sources
