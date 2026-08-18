@@ -258,6 +258,7 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
     <button onclick="showPage('results-page',this)">IP Results <span id="results-count" style="display:none;background:var(--red);color:white;border-radius:10px;padding:1px 6px;font-size:11px;margin-left:4px;"></span></button>
     <button onclick="showPage('hash-results-page',this)">Hash Results <span id="hash-count" style="display:none;background:var(--purple);color:white;border-radius:10px;padding:1px 6px;font-size:11px;margin-left:4px;"></span></button>
     <button onclick="showPage('traffic-page',this)">📡 Traffic Analysis</button>
+    <button onclick="showPage('pcap-page',this)">🧬 PCAP Analysis</button>
     <button onclick="showPage('guide-page',this)">📖 Guide</button>
     <button onclick="showPage('threshold-page',this)">🧮 Threshold Calc</button>
     <button onclick="showPage('settings',this)">⚙ Settings</button>
@@ -274,7 +275,7 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
     <!-- Unified input -->
     <div class="input-row">
       <textarea id="unified-input" style="min-height:140px;"
-        placeholder="Paste IPs and/or hashes here — mix freely, one per line&#10;&#10;IP examples:   185.220.101.1  /  8.8.8.8&#10;Hash examples: d41d8cd98f00b204e9800998ecf8427e  (MD5)&#10;               e3b0c44298fc1c149afbf4c8996fb924...  (SHA256)"></textarea>
+        placeholder="Paste IPs, CIDR prefixes and/or hashes here — mix freely, one per line&#10;&#10;IP examples:   185.220.101.1  /  8.8.8.8&#10;CIDR example:  202.130.52.0/24  (scans every host in the prefix)&#10;Hash examples: d41d8cd98f00b204e9800998ecf8427e  (MD5)&#10;               e3b0c44298fc1c149afbf4c8996fb924...  (SHA256)"></textarea>
     </div>
 
     <!-- Parsed preview -->
@@ -582,10 +583,20 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
               <td style="padding:8px 10px;color:var(--text2);">Open threat exchange pulse hits — active community threat feeds.</td>
               <td style="padding:8px 10px;color:var(--text);">35 pts</td>
             </tr>
-            <tr>
+            <tr style="border-bottom:1px solid var(--border);">
               <td style="padding:8px 10px;color:var(--green);font-weight:700;">ip-api</td>
               <td style="padding:8px 10px;color:var(--text2);">Geo/ASN context. Hosting/datacenter flag adds a risk modifier.</td>
               <td style="padding:8px 10px;color:var(--text);">10 pts</td>
+            </tr>
+            <tr style="border-bottom:1px solid var(--border);">
+              <td style="padding:8px 10px;color:#f0883e;font-weight:700;">Traffic Behavior</td>
+              <td style="padding:8px 10px;color:var(--text2);">Informational only — the IP's share of total capture traffic and bandwidth generated (from the last analyzed CSV). Flow metadata cannot prove maliciousness, so it adds no points to the verdict.</td>
+              <td style="padding:8px 10px;color:var(--text2);">0 pts (info)</td>
+            </tr>
+            <tr>
+              <td style="padding:8px 10px;color:var(--green);font-weight:700;">Whitelist offset</td>
+              <td style="padding:8px 10px;color:var(--text2);">IP marked as known-good shared infrastructure (AbuseIPDB isWhitelisted / OTX whitelisted prefix — e.g. Google, Cloudflare, Fastly). Applies <b style="color:var(--green);">-10 pts</b> and dampens OTX pulse score to 25% (pulse hits on shared infra are co-occurrence, not attribution).</td>
+              <td style="padding:8px 10px;color:var(--green);font-weight:700;">-10 pts</td>
             </tr>
           </tbody>
         </table>
@@ -1003,6 +1014,100 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
   </div>
 </div>
 
+<!-- ══ Mitigation Optimization Page ══ -->
+<div id="mitig-page" class="page">
+  <div style="margin-bottom:20px;display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+    <div>
+      <h2 style="color:var(--cyan);font-size:20px;font-weight:700;margin-bottom:4px;">🛠 Mitigation Optimization</h2>
+      <p style="color:var(--text2);font-size:13px;margin:0;">Deep mitigation plan derived from the analyzed traffic — concrete filter values, policing thresholds, and block candidates.</p>
+    </div>
+    <button class="btn btn-secondary btn-sm" onclick="showPage('traffic-page',document.querySelector('nav button[onclick*=traffic-page]'))">← Back to Traffic Analysis</button>
+  </div>
+  <div id="mitig-empty" class="empty">
+    <div class="icon">🛠</div>
+    <p>No traffic analysis yet.<br>Upload a CSV in Traffic Analysis first, then click Mitigation Optimization.</p>
+  </div>
+  <div id="mitig-content" style="display:none;">
+    <div class="card" style="margin-bottom:16px;">
+      <h2>Protection Context</h2>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:12px;">Clean-pipe service parameters — used to validate coverage and cap the recommended thresholds.</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;">
+        <div>
+          <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Attacked IP(s) — from CSV</div>
+          <div id="mitig-attacked" style="display:flex;flex-direction:column;gap:6px;"></div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Protected Prefixes (one per line — IP optional)</div>
+          <textarea id="mitig-prefixes" rows="4" placeholder="139.0.8.0/24   (full CIDR)&#10;/29            (size only)&#10;2x /28         (count x size)"
+                    style="width:100%;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:12px;font-family:monospace;resize:vertical;box-sizing:border-box;"></textarea>
+          <div id="mitig-prefix-summary" style="font-size:11px;color:var(--text2);margin-top:6px;"></div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Connection Bandwidth (physical link)</div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <input type="number" id="mitig-conn-input" min="1" placeholder="e.g. 1000"
+                   style="width:100px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 8px;font-size:12px;font-weight:700;">
+            <span style="font-size:12px;color:var(--text2);">Mbps</span>
+          </div>
+          <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin:12px 0 6px;">Delivery Cap to Target <span style="text-transform:none;">(optional — size to the target's legitimate need)</span></div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <input type="number" id="mitig-clean-input" min="0.1" step="0.1" placeholder="e.g. 5"
+                   style="width:100px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 8px;font-size:12px;font-weight:700;">
+            <span style="font-size:12px;color:var(--text2);">Mbps</span>
+          </div>
+          <div style="margin-top:12px;">
+            <button class="btn btn-sm" style="font-size:11px;padding:5px 14px;" onclick="applyProtectionContext()">💾 Save Context</button>
+          </div>
+        </div>
+      </div>
+      <div id="mitig-ctx-warnings" style="margin-top:12px;"></div>
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+      <h2>Observed Traffic Profile</h2>
+      <div id="mitig-observed" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;"></div>
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <h2 style="margin:0;">Recommended Filter Values</h2>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <label for="mitig-pipe-input" style="font-size:12px;color:var(--text2);">Pipe / Subscribed BW:</label>
+          <input type="number" id="mitig-pipe-input" min="1" placeholder="e.g. 500"
+                 style="width:90px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px 8px;font-size:12px;font-weight:700;">
+          <span style="font-size:12px;color:var(--text2);">Mbps</span>
+          <button class="btn btn-sm" style="font-size:11px;padding:4px 12px;" onclick="applyPipeBandwidth()">Apply</button>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text2);margin:8px 0 10px;">Thresholds derived from the clean-traffic baseline (attack sources excluded) with 50% headroom. Validate against known-good NetFlow before enforcing; start in Monitor/Ratelimit mode where available.</div>
+      <div id="mitig-values"></div>
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <h2 style="margin:0;">Auto-Mitigation Policy Template</h2>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span id="mitig-svc-detected" style="font-size:11px;color:var(--text2);"></span>
+          <select id="mitig-svc-type" onchange="renderServicePolicy(this.value)"
+                  style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px;font-weight:700;cursor:pointer;"></select>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text2);margin:8px 0 10px;">Nexusguard policy recommendations (v.2026) per protected-service type. Baseline template — combine with the data-driven values above.</div>
+      <div id="mitig-svc-policy"></div>
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <h2 style="margin:0;">Top Block Candidates</h2>
+        <button class="btn btn-secondary btn-sm" style="font-size:11px;padding:3px 10px;" onclick="copyBlockList()">📋 Copy IP list</button>
+      </div>
+      <div style="font-size:11px;color:var(--text2);margin:8px 0 10px;">Ranked by block score (volume share, SYN dominance, QUIC abuse, port scanning, sustained pps). CDN sources are flagged for ratelimit instead of hard-block.</div>
+      <div id="mitig-blocks"></div>
+    </div>
+    <div class="card">
+      <h2>Network Aggregates (/24) — Zombie Network Targets</h2>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:10px;">Subnets with ≥3 offender IPs — candidates for Zombie Network ratelimit/block instead of per-IP entries.</div>
+      <div id="mitig-networks"></div>
+    </div>
+  </div>
+</div>
+
 <!-- ══ Settings Page ══ -->
 <div id="settings" class="page">
   <div class="card">
@@ -1068,6 +1173,128 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
 </div>
 
 <!-- ══ Traffic Analysis Page ══ -->
+<!-- ══════════════ PCAP ANALYSIS PAGE ══════════════ -->
+<div id="pcap-page" class="page">
+
+  <!-- Upload card -->
+  <div class="card" id="pcap-upload-card">
+    <h2>PCAP Analysis</h2>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:20px;">
+      Upload a packet capture (<code style="background:var(--bg3);padding:1px 5px;border-radius:3px;font-size:12px;">.pcap</code> / <code style="background:var(--bg3);padding:1px 5px;border-radius:3px;font-size:12px;">.pcapng</code>) for full-packet inspection: protocol &amp; TCP flag breakdown, top talkers, conversations, DNS queries, HTTP requests, and automatic threat-indicator detection (port scans, SYN floods, sweeps, tunneling) mapped to MITRE ATT&amp;CK.
+    </p>
+    <div class="traffic-upload-zone" id="pcap-drop-zone"
+         onclick="document.getElementById('pcap-file-input').click()"
+         ondragover="event.preventDefault();this.classList.add('drag')"
+         ondragleave="this.classList.remove('drag')"
+         ondrop="handlePcapDrop(event)">
+      <input type="file" id="pcap-file-input" accept=".pcap,.pcapng,.cap" multiple style="display:none;" onchange="handlePcapFiles(this.files)"/>
+      <div style="font-size:40px;margin-bottom:12px;">🧬</div>
+      <div style="font-size:15px;font-weight:500;margin-bottom:6px;">Drop PCAP(s) or click to upload</div>
+      <div style="font-size:12px;color:var(--text2);">Supports .pcap and .pcapng (Wireshark, tcpdump, FortiGate packet sniffer) — max 50 MB</div>
+    </div>
+    <div id="pcap-upload-status" style="display:none;margin-top:14px;font-size:13px;color:var(--text2);text-align:center;"></div>
+  </div>
+
+  <!-- Results -->
+  <div id="pcap-results" style="display:none;">
+
+    <!-- Verdict banner -->
+    <div id="pv-banner" class="verdict-banner clean">
+      <div class="verdict-icon" id="pv-icon"></div>
+      <div>
+        <div class="verdict-label" id="pv-label"></div>
+        <div class="verdict-sub"  id="pv-sub"></div>
+      </div>
+      <div class="score-pill" id="pv-score"></div>
+    </div>
+
+    <!-- Top: Indicators | Summary -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+      <div class="card">
+        <h2>Threat Indicators</h2>
+        <div id="pv-indicators"></div>
+      </div>
+      <div class="card">
+        <h2>Capture Summary</h2>
+        <div class="meta-grid" id="pv-meta"></div>
+        <div style="margin-top:12px;">
+          <div style="font-size:11px;color:var(--text2);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Protocol Distribution</div>
+          <div id="pv-proto" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+        </div>
+        <div style="margin-top:14px;">
+          <div style="font-size:11px;color:var(--text2);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">TCP Flag Distribution</div>
+          <div id="pv-flags" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+        </div>
+        <div style="margin-top:14px;">
+          <div style="font-size:11px;color:var(--text2);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Top Destination Ports</div>
+          <div id="pv-ports" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Middle: Top Sources | Top Destinations -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+      <div class="card">
+        <h2>Top Sources — by Packets</h2>
+        <div style="overflow-x:auto;"><table id="pv-top-src">
+          <thead><tr><th>#</th><th>Source IP</th><th>Packets</th><th>Bytes</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+      <div class="card">
+        <h2>Top Destinations — by Packets</h2>
+        <div style="overflow-x:auto;"><table id="pv-top-dst">
+          <thead><tr><th>#</th><th>Destination IP</th><th>Packets</th><th>Bytes</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <!-- Conversations (paginated) -->
+    <div class="card" style="margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:8px;">
+        <h2 style="margin:0;">Top Conversations</h2>
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);">
+          <span>Per page:</span>
+          <select id="pv-conv-pagesize" onchange="pcapConvPage=1;renderPcapConversations()"
+                  style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer;">
+            <option value="10" style="background:#161b22;color:#e6edf3;" selected>10</option>
+            <option value="15" style="background:#161b22;color:#e6edf3;">15</option>
+            <option value="20" style="background:#161b22;color:#e6edf3;">20</option>
+          </select>
+        </div>
+      </div>
+      <div style="overflow-x:auto;"><table id="pv-convs">
+        <thead><tr><th>#</th><th>Source</th><th></th><th>Destination</th><th>Packets</th><th>Bytes</th><th>Protocols / Ports</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+      <div id="pv-conv-pager" style="display:none;margin-top:12px;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;"></div>
+    </div>
+
+    <!-- DNS + HTTP (hidden if empty) -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+      <div class="card" id="pv-dns-card" style="display:none;">
+        <h2>DNS Queries</h2>
+        <div style="overflow-x:auto;"><table id="pv-dns">
+          <thead><tr><th>Source</th><th>Query</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+      <div class="card" id="pv-http-card" style="display:none;">
+        <h2>HTTP Requests (plaintext)</h2>
+        <div style="overflow-x:auto;"><table id="pv-http">
+          <thead><tr><th>Source</th><th>Host</th><th>Request</th><th>User-Agent</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <!-- Auto-Investigation panel is shared with Traffic Analysis; it gets moved into this slot -->
+    <div id="pcap-auto-inv-slot"></div>
+
+  </div>
+</div>
+
 <div id="traffic-page" class="page">
 
   <!-- Upload card -->
@@ -1101,6 +1328,14 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
         <div class="verdict-sub"  id="tv-sub"></div>
       </div>
       <div class="score-pill" id="tv-score"></div>
+      <select id="tv-manual-verdict" onchange="setTrafficOverallVerdict(this.value)"
+              title="Manually override the overall verdict"
+              style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:12px;font-weight:700;cursor:pointer;margin-left:10px;">
+        <option value=""           style="background:#161b22;color:#e6edf3;">Verdict: Auto</option>
+        <option value="ATTACK"     style="background:#161b22;color:#f85149;font-weight:700;">ATTACK</option>
+        <option value="SUSPICIOUS" style="background:#161b22;color:#d29922;font-weight:700;">SUSPICIOUS</option>
+        <option value="CLEAN"      style="background:#161b22;color:#3fb950;font-weight:700;">CLEAN</option>
+      </select>
     </div>
 
     <!-- Top two-column: Indicators/Summary | Targets/PSD -->
@@ -1153,23 +1388,38 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
 
       <div class="card">
-        <h2>Top 10 Sources — by Bytes</h2>
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <h2>Top 10 Sources — Volume</h2>
+          <select id="tv-top-bytes-mode" onchange="renderTop10Tables()"
+            style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;">
+            <option value="total">Total Bytes</option>
+            <option value="peak">Peak bps</option>
+          </select>
+        </div>
         <div style="overflow-x:auto;"><table id="tv-top-bytes">
-          <thead><tr><th>#</th><th>Source IP</th><th>Bytes</th><th>Packets</th><th>% Total</th></tr></thead>
+          <thead></thead>
           <tbody></tbody>
         </table></div>
       </div>
 
       <div class="card">
-        <h2>Top 10 Sources — by Packets</h2>
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <h2>Top 10 Sources — Packets</h2>
+          <select id="tv-top-pkts-mode" onchange="renderTop10Tables()"
+            style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;">
+            <option value="total">Total Packets</option>
+            <option value="peak">Peak pps</option>
+          </select>
+        </div>
         <div style="overflow-x:auto;"><table id="tv-top-pkts">
-          <thead><tr><th>#</th><th>Source IP</th><th>Packets</th><th>Bytes</th><th>% Total</th></tr></thead>
+          <thead></thead>
           <tbody></tbody>
         </table></div>
       </div>
 
     </div>
 
+    <div id="traffic-auto-inv-anchor" style="display:none;"></div>
     <div id="tv-auto-inv" style="display:none;margin-top:24px;">
       <div class="card">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
@@ -1273,6 +1523,18 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
           <span id="tv-inv-bulk-count" style="font-size:12px;color:var(--cyan);font-weight:600;"></span>
           <span style="font-size:12px;color:var(--text2);">selected</span>
           <button class="btn btn-secondary btn-sm" style="font-size:11px;padding:3px 10px;" onclick="clearTrafficInvSelection()">Deselect All</button>
+          <span style="width:1px;height:18px;background:var(--border);display:inline-block;margin:0 4px;"></span>
+          <span style="font-size:12px;color:var(--text2);">Set verdict:</span>
+          <select id="tv-inv-bulk-verdict"
+                  style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;font-weight:700;cursor:pointer;">
+            <option value="">-- choose --</option>
+            <option value="MALICIOUS">MALICIOUS</option>
+            <option value="HIGH RISK">HIGH RISK</option>
+            <option value="SUSPICIOUS">SUSPICIOUS</option>
+            <option value="CLEAN">CLEAN</option>
+            <option value="__AUTO__">Reset to Auto</option>
+          </select>
+          <button class="btn btn-sm" style="font-size:11px;padding:3px 10px;" onclick="applyBulkTrafficVerdict()">Apply to Selected</button>
         </div>
 
         <div id="tv-inv-results"></div>
@@ -1284,7 +1546,11 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
 
     <div style="margin-top:16px;display:flex;gap:8px;align-items:center;">
       <button class="btn btn-secondary btn-sm" onclick="resetTrafficAnalysis()">↺ Analyze Another File</button>
+      <button class="btn btn-sm" onclick="openMitigationPage()" style="background:var(--cyan);border-color:var(--cyan);color:#000;">🛠 Mitigation Optimization</button>
       <button class="btn btn-sm" id="tv-export-pdf-btn" onclick="exportTrafficPDF()" style="background:var(--red);border-color:var(--red);">📄 Export Traffic PDF</button>
+      <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer;">
+        <input type="checkbox" id="tv-pdf-include-mitig"> Include mitigation recommendations
+      </label>
       <span id="tv-pdf-status" style="font-size:12px;color:var(--text2);"></span>
     </div>
   </div>
@@ -1301,6 +1567,7 @@ var activeTab       = 'single';
 var uploadedIPs     = [];
 var manualVerdicts  = {};       // { ip: 'SUSPICIOUS' }
 var trafficInvManualVerdicts = {};  // manual overrides for traffic auto-investigation
+var trafficManualVerdict     = null; // manual override for the OVERALL traffic verdict (null = auto)
 var trafficAnalysisData      = null; // full traffic analysis result for PDF export
 var trafficInvAllResults     = [];  // stored for recalc
 var trafficBaseScore         = 0;   // original attack score before reputation bonus
@@ -1456,11 +1723,21 @@ function parseUnifiedInput() {
   var hashes = [];
   var invalid = [];
   lines.forEach(function(l) {
-    if (isValidIP(l)) ips.push(l);
+    if (isValidIP(l) || isCIDR(l)) ips.push(l);
     else if (/^[0-9a-fA-F]{32}$/.test(l) || /^[0-9a-fA-F]{40}$/.test(l) || /^[0-9a-fA-F]{64}$/.test(l)) hashes.push(l.toLowerCase());
     else if (l) invalid.push(l);
   });
   return { ips: ips, hashes: hashes, invalid: invalid };
+}
+
+// CIDR prefix, e.g. 202.130.52.0/24 — expanded to host IPs server-side.
+function isCIDR(s) {
+  var m = /^(\d{1,3}\.){3}\d{1,3}\/(\d{1,2})$/.exec(s.trim());
+  if (!m) return false;
+  var parts = s.split('/');
+  var prefix = parseInt(parts[1], 10);
+  return prefix >= 0 && prefix <= 32 &&
+    parts[0].split('.').every(function(p){ return parseInt(p) <= 255; });
 }
 
 function isValidIP(s) {
@@ -1658,7 +1935,7 @@ function resultRow(r, inline) {
   var detailHtml = r.sources.map(function(s) {
     var iocLines = (s.ioc || []).map(function(l){ return '<div class="ioc-line">' + esc(l) + '</div>'; }).join('');
     var sign  = s.score > 0 ? '+' + s.score : s.score < 0 ? '' + s.score : '0';
-    var sc    = s.score >= 20 ? 'var(--red)' : s.score >= 10 ? 'var(--orange)' : s.score > 0 ? 'var(--yellow)' : 'var(--text2)';
+    var sc    = s.score >= 20 ? 'var(--red)' : s.score >= 10 ? 'var(--orange)' : s.score > 0 ? 'var(--yellow)' : s.score < 0 ? 'var(--green)' : 'var(--text2)';
     var link  = s.url ? '<a class="src-link" href="' + esc(s.url) + '" target="_blank" rel="noopener">🔗 View on ' + esc(s.source) + ' ↗</a>' : '';
     return '<div class="source-card">'
       + '<h4>' + esc(s.source) + '<span style="color:' + sc + ';font-weight:600;">' + sign + ' pts</span></h4>'
@@ -2311,7 +2588,7 @@ function hashRow(r) {
   var detailHtml = r.sources.map(function(s) {
     var iocLines = (s.ioc || []).map(function(l){ return '<div class="ioc-line">' + esc(l) + '</div>'; }).join('');
     var sign  = s.score > 0 ? '+' + s.score : s.score < 0 ? '' + s.score : '0';
-    var sc    = s.score >= 20 ? 'var(--red)' : s.score >= 10 ? 'var(--orange)' : s.score > 0 ? 'var(--yellow)' : 'var(--text2)';
+    var sc    = s.score >= 20 ? 'var(--red)' : s.score >= 10 ? 'var(--orange)' : s.score > 0 ? 'var(--yellow)' : s.score < 0 ? 'var(--green)' : 'var(--text2)';
     var link  = s.url ? '<a class="src-link" href="' + esc(s.url) + '" target="_blank" rel="noopener">🔗 View on ' + esc(s.source) + ' ↗</a>' : '';
     return '<div class="source-card">'
       + '<h4>' + esc(s.source) + '<span style="color:' + sc + ';font-weight:600;">' + sign + ' pts</span></h4>'
@@ -2542,6 +2819,11 @@ function renderTrafficResults(d) {
   // Store base values directly from backend — used by recalcTrafficScore()
   trafficBaseScore      = d.attack_score;
   trafficBaseIndicators = d.indicators.length;
+  trafficManualVerdict  = null;  // new dataset -> clear manual override
+  var mvSel = document.getElementById('tv-manual-verdict');
+  if (mvSel) mvSel.value = '';
+  var svcSel2 = document.getElementById('mitig-svc-type');
+  if (svcSel2) delete svcSel2.dataset.userSet;  // new dataset -> re-auto-detect service type
 
   // Indicators
   var indHtml = d.indicators.length ? d.indicators.map(function(ind){
@@ -2551,6 +2833,7 @@ function renderTrafficResults(d) {
       +'</div>';
   }).join('') : '<div style="color:var(--green);font-size:13px;">No suspicious indicators found.</div>';
   document.getElementById('tv-indicators').innerHTML = indHtml;
+
 
   // Summary meta cards
   var s = d.summary;
@@ -2595,36 +2878,78 @@ function renderTrafficResults(d) {
     return '<span class="port-pill '+cls+'">'+p.port+label+': '+p.flows+'</span>';
   }).join('');
 
-  // Top 10 by bytes
-  var totalBytes = d.summary.total_bytes;
-  document.querySelector('#tv-top-bytes tbody').innerHTML = d.top10_bytes.map(function(row,i){
-    var pct = totalBytes ? (row.bytes/totalBytes*100).toFixed(1) : 0;
-    var cdnTag = row.cdn ? '<span class="cdn-tag">'+esc(row.cdn)+'</span>' : '';
-    return '<tr><td style="color:var(--text2);">'+(i+1)+'</td>'
-      +'<td style="font-family:monospace;font-size:12px;">'+esc(row.ip)+cdnTag+'</td>'
-      +'<td style="color:var(--red);font-weight:600;">'+row.bytes_fmt+'</td>'
-      +'<td style="color:var(--text2);">'+row.packets_fmt+'</td>'
-      +'<td><div style="display:flex;align-items:center;gap:6px;">'
-      +'<div class="top-bar" style="width:60px;"><div class="top-bar-fill" style="width:'+Math.min(pct,100)+'%;background:var(--red);"></div></div>'
-      +'<span style="font-size:11px;color:var(--text2);">'+pct+'%</span>'
-      +'</div></td></tr>';
-  }).join('');
+  // Top 10 tables (total volume / Nexusguard-style peak rate)
+  renderTop10Tables();
+  finishTrafficRender(d);
+}
 
-  // Top 10 by packets
-  var totalPkts = d.summary.total_packets;
-  document.querySelector('#tv-top-pkts tbody').innerHTML = d.top10_packets.map(function(row,i){
-    var pct = totalPkts ? (row.packets/totalPkts*100).toFixed(1) : 0;
-    var cdnTag = row.cdn ? '<span class="cdn-tag">'+esc(row.cdn)+'</span>' : '';
+function renderTop10Tables() {
+  var d = trafficAnalysisData;
+  if (!d) return;
+  function bar(pct, color) {
+    return '<td><div style="display:flex;align-items:center;gap:6px;">'
+      +'<div class="top-bar" style="width:60px;"><div class="top-bar-fill" style="width:'+Math.min(pct,100)+'%;background:'+color+';"></div></div>'
+      +'<span style="font-size:11px;color:var(--text2);">'+pct+'%</span></div></td>';
+  }
+  function rowStart(i, ip, cdn) {
+    var cdnTag = cdn ? '<span class="cdn-tag">'+esc(cdn)+'</span>' : '';
     return '<tr><td style="color:var(--text2);">'+(i+1)+'</td>'
-      +'<td style="font-family:monospace;font-size:12px;">'+esc(row.ip)+cdnTag+'</td>'
-      +'<td style="color:var(--orange);font-weight:600;">'+row.packets_fmt+'</td>'
-      +'<td style="color:var(--text2);">'+row.bytes_fmt+'</td>'
-      +'<td><div style="display:flex;align-items:center;gap:6px;">'
-      +'<div class="top-bar" style="width:60px;"><div class="top-bar-fill" style="width:'+Math.min(pct,100)+'%;background:var(--orange);"></div></div>'
-      +'<span style="font-size:11px;color:var(--text2);">'+pct+'%</span>'
-      +'</div></td></tr>';
-  }).join('');
+      +'<td style="font-family:monospace;font-size:12px;">'+esc(ip)+cdnTag+'</td>';
+  }
+  var iv = d.rate_interval_s ? ' ('+d.rate_interval_s+'s interval)' : '';
 
+  // ── Volume card ─────────────────────────────────────────────────
+  var modeB = (document.getElementById('tv-top-bytes-mode')||{}).value || 'total';
+  var theadB, rowsB;
+  if (modeB === 'peak' && d.top10_peak_bps) {
+    theadB = '<tr><th>#</th><th>Source IP</th><th>Peak Rate'+iv+'</th><th>Total Bytes</th><th>% Peak Share</th></tr>';
+    rowsB = d.top10_peak_bps.map(function(row,i){
+      return rowStart(i,row.ip,row.cdn)
+        +'<td style="color:var(--red);font-weight:600;">'+row.rate_fmt+'</td>'
+        +'<td style="color:var(--text2);">'+row.total_fmt+'</td>'
+        +bar(row.pct,'var(--red)')+'</tr>';
+    }).join('');
+  } else {
+    var totalBytes = d.summary.total_bytes;
+    theadB = '<tr><th>#</th><th>Source IP</th><th>Bytes</th><th>Packets</th><th>% Total</th></tr>';
+    rowsB = d.top10_bytes.map(function(row,i){
+      var pct = totalBytes ? (row.bytes/totalBytes*100).toFixed(1) : 0;
+      return rowStart(i,row.ip,row.cdn)
+        +'<td style="color:var(--red);font-weight:600;">'+row.bytes_fmt+'</td>'
+        +'<td style="color:var(--text2);">'+row.packets_fmt+'</td>'
+        +bar(pct,'var(--red)')+'</tr>';
+    }).join('');
+  }
+  document.querySelector('#tv-top-bytes thead').innerHTML = theadB;
+  document.querySelector('#tv-top-bytes tbody').innerHTML = rowsB;
+
+  // ── Packets card ────────────────────────────────────────────────
+  var modeP = (document.getElementById('tv-top-pkts-mode')||{}).value || 'total';
+  var theadP, rowsP;
+  if (modeP === 'peak' && d.top10_peak_pps) {
+    theadP = '<tr><th>#</th><th>Source IP</th><th>Peak Rate'+iv+'</th><th>Total Packets</th><th>% Peak Share</th></tr>';
+    rowsP = d.top10_peak_pps.map(function(row,i){
+      return rowStart(i,row.ip,row.cdn)
+        +'<td style="color:var(--orange);font-weight:600;">'+row.rate_fmt+'</td>'
+        +'<td style="color:var(--text2);">'+row.total_fmt+'</td>'
+        +bar(row.pct,'var(--orange)')+'</tr>';
+    }).join('');
+  } else {
+    var totalPkts = d.summary.total_packets;
+    theadP = '<tr><th>#</th><th>Source IP</th><th>Packets</th><th>Bytes</th><th>% Total</th></tr>';
+    rowsP = d.top10_packets.map(function(row,i){
+      var pct = totalPkts ? (row.packets/totalPkts*100).toFixed(1) : 0;
+      return rowStart(i,row.ip,row.cdn)
+        +'<td style="color:var(--orange);font-weight:600;">'+row.packets_fmt+'</td>'
+        +'<td style="color:var(--text2);">'+row.bytes_fmt+'</td>'
+        +bar(pct,'var(--orange)')+'</tr>';
+    }).join('');
+  }
+  document.querySelector('#tv-top-pkts thead').innerHTML = theadP;
+  document.querySelector('#tv-top-pkts tbody').innerHTML = rowsP;
+}
+
+function finishTrafficRender(d) {
   // Packet size distribution chart
   if (d.pkt_size_dist) {
     var psd     = d.pkt_size_dist;
@@ -2711,6 +3036,14 @@ function renderTrafficResults(d) {
   }
 
 
+  // Claim the shared Auto-Investigation panel for the Traffic context
+  invContext = 'traffic';
+  var _anchor = document.getElementById('traffic-auto-inv-anchor');
+  var _invDiv = document.getElementById('tv-auto-inv');
+  if (_anchor && _invDiv && _invDiv.previousElementSibling !== _anchor) {
+    _anchor.insertAdjacentElement('afterend', _invDiv);
+  }
+
   // Update "All unique IPs" label with actual count
   var invPool = d.all_sources_bytes || d.top10_bytes;
   var allLabel = document.getElementById('tv-inv-all-label');
@@ -2776,7 +3109,9 @@ function exportTrafficPDF() {
   var effectiveLabelEl = document.getElementById('tv-label');
   var effectiveScore   = effectiveScoreEl ? parseInt((effectiveScoreEl.textContent||'').replace('Score:','').trim())||0 : trafficBaseScore;
   var bannerEl         = document.getElementById('tv-banner');
-  var effectiveVerdict = bannerEl && bannerEl.classList.contains('attack') ? 'ATTACK'
+  var effectiveVerdict = trafficManualVerdict
+                       ? trafficManualVerdict
+                       : bannerEl && bannerEl.classList.contains('attack') ? 'ATTACK'
                        : bannerEl && bannerEl.classList.contains('suspicious') ? 'SUSPICIOUS' : 'NORMAL';
   var payload = {
     traffic:          trafficAnalysisData,
@@ -2785,6 +3120,9 @@ function exportTrafficPDF() {
     override_score:   effectiveScore,
     override_verdict: effectiveVerdict
   };
+  if (trafficManualVerdict) payload.override_confidence = 'MANUAL (analyst-set)';
+  var mitCb = document.getElementById('tv-pdf-include-mitig');
+  payload.include_mitigations = !!(mitCb && mitCb.checked);  // default: excluded
 
   fetch('/api/export/traffic/pdf', {
     method: 'POST',
@@ -2830,9 +3168,20 @@ function updateInvModeUI() {
   }
 }
 
+// Which dataset feeds the shared Auto-Investigation panel: 'traffic' or 'pcap'
+var invContext = 'traffic';
+
+function getInvPool() {
+  if (invContext === 'pcap') {
+    return (pcapData && pcapData.all_sources) || [];
+  }
+  if (!trafficAnalysisData) return [];
+  return trafficAnalysisData.all_sources_bytes || trafficAnalysisData.top10_bytes || [];
+}
+
 function renderTrafficInvSpecificPicker() {
-  if (!trafficAnalysisData) return;
-  var pool = trafficAnalysisData.all_sources_bytes || trafficAnalysisData.top10_bytes || [];
+  var pool = getInvPool();
+  if (!pool.length) return;
   var q = (document.getElementById('tv-inv-specific-search').value || '').trim().toLowerCase();
   var filtered = q ? pool.filter(function(r){ return r.ip.toLowerCase().indexOf(q) >= 0; }) : pool;
   var list = document.getElementById('tv-inv-specific-list');
@@ -2854,9 +3203,9 @@ function toggleTrafficInvSpecific(ip, checked) {
 }
 
 function selectAllTrafficInvSpecific() {
-  if (!trafficAnalysisData) return;
+  var pool = getInvPool();
+  if (!pool.length) return;
   var q = (document.getElementById('tv-inv-specific-search').value || '').trim().toLowerCase();
-  var pool = trafficAnalysisData.all_sources_bytes || trafficAnalysisData.top10_bytes || [];
   var filtered = q ? pool.filter(function(r){ return r.ip.toLowerCase().indexOf(q) >= 0; }) : pool;
   filtered.forEach(function(r){ trafficInvSpecificSelected[r.ip] = true; });
   renderTrafficInvSpecificPicker();
@@ -2892,9 +3241,10 @@ function getInvIPsFromMode(pool) {
 }
 
 function rerunAutoInvestigation() {
-  if (!trafficAnalysisData) return;
-  var pool = trafficAnalysisData.all_sources_bytes || trafficAnalysisData.top10_bytes || [];
+  var pool = getInvPool();
   if (!pool.length) return;
+  var ctxData = invContext === 'pcap' ? pcapData : trafficAnalysisData;
+  if (!ctxData) return;
   var ips = getInvIPsFromMode(pool);
   if (getInvMode() === 'specific' && !ips.length) {
     var status = document.getElementById('tv-inv-status');
@@ -2904,17 +3254,18 @@ function rerunAutoInvestigation() {
   }
   // Abort any in-progress investigation
   if (trafficInvAbortController) { trafficInvAbortController.abort(); trafficInvAbortController = null; }
-  // Reset state for fresh run
+  // Reset state for fresh run — restore base values from the traffic analysis
+  // (NOT zero: zeroing them made the banner show "0 indicators" after a rerun)
   trafficInvAllResults     = [];
-  trafficBaseScore         = 0;
-  trafficBaseIndicators    = 0;
+  trafficBaseScore         = ctxData.attack_score || 0;
+  trafficBaseIndicators    = (ctxData.indicators || []).length;
   trafficInvManualVerdicts = {};
   trafficInvSelected       = {};
   trafficInvVerdictFilter  = 'ALL';
   trafficInvSearchQuery    = '';
   trafficInvTop10Filter    = false;
-  // Build top-10 set from data (first 10 of all_sources_bytes which is sorted by bytes desc)
-  var top10list = (trafficAnalysisData.all_sources_bytes || trafficAnalysisData.top10_bytes || []).slice(0,10);
+  // Build top-10 set from data (first 10 of the pool, sorted by volume desc)
+  var top10list = pool.slice(0,10);
   trafficInvTop10Set = {};
   top10list.forEach(function(r){ trafficInvTop10Set[r.ip] = true; });
   document.getElementById('tv-inv-results').innerHTML = '';
@@ -3155,10 +3506,11 @@ function renderTrafficInvResults(results) {
     +' onclick="toggleTrafficInvSelectAll(this)" title="Select all visible"></th>'
     +'<th>#</th><th>Source IP</th><th>Verdict</th><th style="min-width:120px;">Override</th>'
     +'<th>Score</th><th style="min-width:260px;">Threat Intel</th>'
+    +'<th style="min-width:220px;color:#f0883e;">Traffic Behavior</th>'
     +'</tr></thead><tbody>';
 
   if (!filtered.length) {
-    html += '<tr><td colspan="7" style="text-align:center;color:var(--text2);padding:28px;">No results match current filters</td></tr>';
+    html += '<tr><td colspan="8" style="text-align:center;color:var(--text2);padding:28px;">No results match current filters</td></tr>';
   } else {
     filtered.forEach(function(r,i){
       var ev=trafficInvManualVerdicts[r.ip]||r.verdict, isMov=!!trafficInvManualVerdicts[r.ip];
@@ -3170,8 +3522,12 @@ function renderTrafficInvResults(results) {
         var s=srcs.find(function(x){ return x.source===def.key; });
         if(!s) return '';
         var pts=s.score||0;
-        var ps=pts>0?'<b style="color:var(--red);">+'+pts.toFixed(1)+' pts</b>':'<span style="color:var(--text2);">-- 0 pts</span>';
-        var ioc=(s.ioc&&s.ioc.length)?s.ioc[0]:(s.error?'Error: '+s.error:'No data');
+        var ps=pts>0?'<b style="color:var(--red);">+'+(+pts.toFixed(2))+' pts</b>'
+             :pts<0?'<b style="color:var(--green);">'+(+pts.toFixed(2))+' pts</b>'
+             :'<span style="color:var(--text2);">-- 0 pts</span>';
+        // Surface whitelist/dampening note if present, else first IOC line
+        var wlLine=(s.ioc||[]).find(function(l){ return /whitelist|dampened/i.test(l); });
+        var ioc=wlLine||((s.ioc&&s.ioc.length)?s.ioc[0]:(s.error?'Error: '+s.error:'No data'));
         return '<div style="display:flex;gap:6px;align-items:baseline;margin-bottom:3px;">'
           +'<span style="color:'+def.color+';font-weight:700;min-width:55px;">'+def.label+'</span>'
           +ps+'<span style="color:var(--text2);margin-left:5px;font-size:10px;">'+esc(ioc)+'</span></div>';
@@ -3182,6 +3538,46 @@ function renderTrafficInvResults(results) {
         +verdictOpts.map(function(v){ return '<option value="'+v+'"'+(trafficInvManualVerdicts[r.ip]===v?' selected':'')+'>'+v+'</option>'; }).join('')
         +'</select>';
       var isTop10 = !!trafficInvTop10Set[r.ip];
+
+      // ── Traffic Behavior column ──────────────────────────────────
+      var beh = srcs.find(function(x){ return x.source==='Traffic Behavior'; });
+      var behHtml;
+      var shareLine = beh && (beh.ioc||[]).find(function(l){ return l.indexOf('Traffic share')===0; });
+      if (beh && shareLine) {
+        var shareMatch = shareLine.match(/([\d.]+)%/);
+        var sharePct   = shareMatch ? parseFloat(shareMatch[1]) : 0;
+        // Continuous green→yellow→orange→red gradient: 0% = green, >=30% = full red
+        var shc = 'hsl(' + Math.round(120 - Math.min(sharePct/30,1)*120) + ',75%,55%)';
+        var rest = (beh.ioc||[]).filter(function(l){ return l!==shareLine; }).map(function(l){
+          return '<div style="color:var(--text2);font-size:10px;margin-top:2px;">'+esc(l)+'</div>';
+        }).join('');
+        behHtml = '<div style="display:flex;gap:8px;align-items:center;">'
+          +'<b style="color:'+shc+';font-size:15px;">'+sharePct+'%</b>'
+          +'<span style="color:var(--text2);font-size:10px;">of total traffic</span>'
+          +'</div>'
+          +'<div style="height:4px;background:var(--border);border-radius:2px;margin:4px 0;max-width:140px;">'
+          +'<div style="height:100%;width:'+Math.min(sharePct,100)+'%;background:'+shc+';border-radius:2px;"></div></div>'
+          +rest;
+      } else {
+        var volInfo = ((trafficAnalysisData&&(trafficAnalysisData.all_sources_bytes||trafficAnalysisData.top10_bytes))||[])
+          .find(function(x){ return x.ip===r.ip; });
+        if (volInfo) {
+          // BW involvement: this IP's share of total event bytes
+          var totB = trafficAnalysisData && trafficAnalysisData.summary && trafficAnalysisData.summary.total_bytes;
+          var invPct = totB ? Math.round(volInfo.bytes/totB*10000)/100 : 0;
+          var invC = 'hsl(' + Math.round(120 - Math.min(invPct/30,1)*120) + ',75%,55%)';
+          behHtml = '<div style="display:flex;gap:8px;align-items:center;">'
+            +'<b style="color:'+invC+';font-size:15px;">'+invPct+'%</b>'
+            +'<span style="color:var(--text2);font-size:10px;">of event traffic</span></div>'
+            +'<div style="height:4px;background:var(--border);border-radius:2px;margin:4px 0;max-width:140px;">'
+            +'<div style="height:100%;width:'+Math.min(invPct,100)+'%;background:'+invC+';border-radius:2px;"></div></div>'
+            +'<div style="color:var(--text2);font-size:10px;">'+esc(volInfo.bytes_fmt||'')+' | '+esc(volInfo.packets_fmt||'')+' pkts'
+            +(volInfo.cdn?' | '+esc(volInfo.cdn):'')+'</div>';
+        } else {
+          behHtml = '<span style="color:var(--text2);font-size:10px;">--</span>';
+        }
+      }
+
       html+='<tr>'
         +'<td><input type="checkbox" class="row-cb tv-inv-row-cb" data-ip="'+esc(r.ip)+'"'+(isChk?' checked':'')+' onchange="onTrafficInvRowCheckbox(this)"></td>'
         +'<td style="color:var(--text2);">'+(i+1)+'</td>'
@@ -3194,7 +3590,8 @@ function renderTrafficInvResults(results) {
         +'<div style="flex:1;height:6px;background:var(--border);border-radius:3px;min-width:60px;">'
         +'<div style="height:100%;width:'+Math.min(r.score,100)+'%;background:'+sc+';border-radius:3px;"></div></div>'
         +'<span style="color:'+sc+';font-weight:700;font-size:12px;white-space:nowrap;">'+r.score+'</span></div></td>'
-        +'<td style="font-size:11px;line-height:1.8;">'+(bdown||'--')+'</td></tr>';
+        +'<td style="font-size:11px;line-height:1.8;">'+(bdown||'--')+'</td>'
+        +'<td style="font-size:11px;vertical-align:top;padding-top:12px;">'+behHtml+'</td></tr>';
     });
   }
   html += '</tbody></table></div>';
@@ -3206,6 +3603,504 @@ function renderTrafficInvResults(results) {
   var vb = document.getElementById('tv-inv-view-btn');
   if (vb) vb.style.display = 'block';
   updateTrafficInvBulkBar();
+  recalcTrafficScore();
+}
+
+function applyBulkTrafficVerdict() {
+  var sel = document.getElementById('tv-inv-bulk-verdict');
+  var v   = sel ? sel.value : '';
+  var ips = Object.keys(trafficInvSelected);
+  if (!v)          { alert('Choose a verdict to apply.'); return; }
+  if (!ips.length) { alert('No IPs selected.'); return; }
+  ips.forEach(function(ip) {
+    if (v === '__AUTO__') {
+      delete trafficInvManualVerdicts[ip];
+      delete manualVerdicts[ip];
+    } else {
+      trafficInvManualVerdicts[ip] = v;
+      manualVerdicts[ip] = v;
+    }
+  });
+  renderTrafficInvResults(trafficInvAllResults);  // re-render + recalc score once
+  if (ips.some(function(ip){ return allResults.some(function(r){ return r.ip===ip; }); })) renderResults();
+  sel.value = '';
+}
+
+// ── Auto-Mitigation Policy Template (Nexusguard v.2026) ───────────
+// Column order: [VPN, Web, GRE, DNS, API, Mobile Applications]
+var SVC_TYPES = ['VPN', 'Web', 'GRE', 'DNS', 'API', 'Mobile Applications'];
+var _CR  = 'Customer requirements';
+var _RL1 = 'ON; 100 bps / 10 pps';
+var _RLD = 'ON; 10 Mbps / 10 Kpps';
+var SVC_POLICY = [
+  {cat:'Allow/Blocklist', rule:'',                     v:[_CR,_CR,_CR,_CR,_CR,_CR]},
+  {cat:'NTIF',            rule:'',                     v:['Monitor','Monitor','Monitor','Monitor','Monitor','Monitor']},
+  {cat:'Bogons',          rule:'Martian Addresses',    v:['OFF','DROP','OFF','DROP','DROP','DROP']},
+  {cat:'Bogons',          rule:'LAND Attack',          v:['DROP','DROP','DROP','DROP','DROP','DROP']},
+  {cat:'IP Anti-Flood',   rule:'IP Invalid',           v:['DROP','OFF','OFF','OFF','DROP','DROP']},
+  {cat:'IP Anti-Flood',   rule:'IP Fragmentation',     v:['DROP','OFF','DROP','OFF','OFF','OFF']},
+  {cat:'IP Anti-Flood',   rule:'Protocol Custom Filter', v:['ICMP, UDP, ESP, AH','TCP','GRE','UDP, TCP','TCP','UDP, TCP'], rm:'Allowed protocols'},
+  {cat:'ICMP Anti-Flood', rule:'All ICMP Packet',      v:['OFF','OFF','OFF','OFF','OFF','OFF']},
+  {cat:'ICMP Anti-Flood', rule:'ICMP Fragmentation',   v:['DROP','DROP','DROP','DROP','DROP','DROP']},
+  {cat:'ICMP Anti-Flood', rule:'ICMP Custom Filter',   v:[_CR,_CR,_CR,_CR,_CR,_CR]},
+  {cat:'ICMP Anti-Flood', rule:'Large Ping',           v:['DROP','DROP','DROP','DROP','DROP','DROP']},
+  {cat:'TCP Anti-Flood',  rule:'TCP Fragmentation',    v:['DROP','DROP','DROP','DROP','DROP','DROP']},
+  {cat:'TCP Anti-Flood',  rule:'TCP Long Header',      v:['DROP','DROP','DROP','DROP','DROP','DROP']},
+  {cat:'TCP Anti-Flood',  rule:'TCP Invalid Flags',    v:['DROP','DROP','DROP','DROP','DROP','DROP']},
+  {cat:'TCP Anti-Flood',  rule:'TCP SYN with Reserved Flags', v:['OFF','OFF','OFF','OFF','OFF','OFF']},
+  {cat:'TCP Anti-Flood',  rule:'TCP SYN with Data',    v:['OFF','OFF','OFF','OFF','OFF','OFF']},
+  {cat:'TCP Anti-Flood',  rule:'TCP both Src & Dst Well-Known ports', v:['DROP','DROP','DROP','DROP','DROP','DROP']},
+  {cat:'TCP Anti-Flood',  rule:'TCP SYN (excl. SYN-ACK / SYN-ACK-ECN)', v:['OFF','OFF','OFF','OFF','OFF','OFF']},
+  {cat:'TCP Anti-Flood',  rule:'TCP Anti-Spoofing',    v:['OFF','ON','OFF','ON','OFF','ON'], rm:'TCP Retransmission set to defaults'},
+  {cat:'TCP Anti-Flood',  rule:'TCP Rewrite MSS Size', v:['OFF','OFF','OFF','OFF','OFF','OFF']},
+  {cat:'UDP Anti-Flood',  rule:'UDP Fragmentation',    v:['DROP','DROP','DROP','DROP','DROP','DROP']},
+  {cat:'UDP Anti-Flood',  rule:'UDP Src & Dst Port < 1024', v:['OFF','OFF','OFF','OFF','OFF','OFF']},
+  {cat:'UDP Anti-Flood',  rule:'UDP Packet contains no Data', v:['DROP','DROP','DROP','DROP','DROP','DROP']},
+  {cat:'UDP Anti-Flood',  rule:'DNS Flood & Amplification', v:['DROP','DROP','DROP','DROP','DROP','DROP']},
+  {cat:'UDP Anti-Flood',  rule:'DNS Query Length',     v:['ON (512 B)','ON (512 B)','ON (512 B)','ON (512 B)','ON (512 B)','ON (512 B)']},
+  {cat:'UDP Anti-Flood',  rule:'DNS Query Rate Limit', v:[_RL1,_RL1,_RL1,_RLD,_RL1,_RL1]},
+  {cat:'UDP Anti-Flood',  rule:'DNS Response Length',  v:['ON (512 B)','ON (512 B)','ON (512 B)','ON (512 B)','ON (512 B)','ON (512 B)']},
+  {cat:'UDP Anti-Flood',  rule:'DNS Response Rate Limit', v:[_RL1,_RL1,_RL1,_RLD,_RL1,_RL1]},
+  {cat:'UDP Anti-Flood',  rule:'NTP Amplification',    v:['DROP','DROP','DROP','DROP','DROP','DROP']},
+  {cat:'UDP Anti-Flood',  rule:'NTP Response Length',  v:['ON (512 B)','ON (512 B)','ON (512 B)','ON (512 B)','ON (512 B)','ON (512 B)']},
+  {cat:'UDP Anti-Flood',  rule:'NTP Response Rate Limit', v:[_RL1,_RL1,_RL1,_RLD,_RL1,_RL1]},
+  {cat:'UDP Anti-Flood',  rule:'SNMP Amplification',   v:['DROP','DROP','DROP','DROP','DROP','DROP']},
+  {cat:'UDP Anti-Flood',  rule:'SNMP Response Ratelimit', v:[_RL1,_RL1,_RL1,_RLD,_RL1,_RL1]},
+  {cat:'UDP Anti-Flood',  rule:'SSDP Flood',           v:['DROP','DROP','DROP','DROP','DROP','DROP']},
+  {cat:'UDP Anti-Flood',  rule:"UDP Packet contains all '0' Data", v:['DROP','DROP','DROP','DROP','DROP','DROP']},
+  {cat:'L7 Anti-Flood',   rule:'',                     v:[_CR,_CR,_CR,_CR,_CR,_CR]},
+  {cat:'Protocol Anti-Flood', rule:'',                 v:['ON TCP & UDP (100 Mbps / 100 Kpps)','OFF','ON TCP & UDP (100 Mbps / 100 Kpps)','ON TCP & UDP (100 Mbps / 100 Kpps)','OFF','ON TCP & UDP (100 Mbps / 100 Kpps)'], rm:'Adjust to expected TCP/UDP traffic'},
+  {cat:'Flex Filter',     rule:'',                     v:[_CR,_CR,_CR,_CR,_CR,_CR]},
+  {cat:'Zombie',          rule:'Host',                 v:['OFF','ON (512 Kbps / 256 pps)','OFF','OFF','ON (256 Kbps / 128 pps)','ON (512 Kbps / 300 pps)']},
+  {cat:'Zombie',          rule:'Network',              v:['ON (10 Mbps / 2 Kpps)','ON (5 Mbps / 1 Kpps)','ON (20 Mbps / 5 Kpps)','ON (2 Mbps / 500 pps)','ON (2 Mbps / 500 pps)','ON (10 Mbps / 2 Kpps)']},
+  {cat:'Traffic Policing', rule:'',                    v:['ON (per Subscribed Bandwidth)','ON (per Subscribed Bandwidth)','ON (per Subscribed Bandwidth)','ON (per Subscribed Bandwidth)','ON (per Subscribed Bandwidth)','ON (per Subscribed Bandwidth)']}
+];
+
+function detectServiceType() {
+  var d = trafficAnalysisData;
+  if (!d) return 'Web';
+  var pd = d.protocol_dist || {};
+  var totalFlows = 0, greFlows = 0, vpnProto = 0;
+  Object.keys(pd).forEach(function(k){
+    totalFlows += pd[k];
+    if (k === 'GRE' || k === '47') greFlows += pd[k];
+    if (k === 'ESP' || k === '50' || k === 'AH' || k === '51') vpnProto += pd[k];
+  });
+  if (totalFlows && greFlows / totalFlows > 0.1) return 'GRE';
+  if (totalFlows && vpnProto / totalFlows > 0.1) return 'VPN';
+  var ports = (d.targets && d.targets.ports) || [];
+  if (ports.length) {
+    var top = ports[0].port;
+    if (top === 53 || top === 853) return 'DNS';
+    if ([500, 4500, 1701, 1723].indexOf(top) >= 0) return 'VPN';
+  }
+  return 'Web';
+}
+
+function svcValColor(v) {
+  if (v === 'DROP') return 'var(--red)';
+  if (v.indexOf('ON') === 0) return 'var(--green)';
+  if (v === 'OFF') return 'var(--text2)';
+  if (v === 'Monitor') return 'var(--yellow)';
+  return 'var(--cyan)';
+}
+
+function renderServicePolicy(svcType) {
+  var idx = SVC_TYPES.indexOf(svcType);
+  if (idx < 0) { idx = 1; svcType = 'Web'; }
+  var sel = document.getElementById('mitig-svc-type');
+  if (sel && sel.value !== svcType) sel.value = svcType;
+  var lastCat = null;
+  var rows = SVC_POLICY.map(function(r){
+    var catCell = r.cat !== lastCat
+      ? '<td style="padding:6px 8px;border-bottom:1px solid var(--border);font-weight:700;color:var(--cyan);white-space:nowrap;">'+esc(r.cat)+'</td>'
+      : '<td style="padding:6px 8px;border-bottom:1px solid var(--border);"></td>';
+    lastCat = r.cat;
+    var val = r.v[idx];
+    return '<tr>'+catCell
+      +'<td style="padding:6px 8px;border-bottom:1px solid var(--border);color:var(--text);">'+esc(r.rule||'—')+'</td>'
+      +'<td style="padding:6px 8px;border-bottom:1px solid var(--border);font-weight:700;color:'+svcValColor(val)+';">'+esc(val)+'</td>'
+      +'<td style="padding:6px 8px;border-bottom:1px solid var(--border);color:var(--text2);font-size:11px;">'+esc(r.rm||'')+'</td></tr>';
+  }).join('');
+  document.getElementById('mitig-svc-policy').innerHTML =
+    '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">'
+    +'<thead><tr>'
+    +['Filter','Sub-rule','Recommended ('+esc(svcType)+')','Remarks'].map(function(h){
+      return '<th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);color:var(--text2);font-size:11px;text-transform:uppercase;letter-spacing:.4px;">'+h+'</th>';
+    }).join('')+'</tr></thead><tbody>'+rows+'</tbody></table></div>';
+}
+
+// ── Mitigation Optimization page ──────────────────────────────────
+function openMitigationPage() {
+  showPage('mitig-page', null);
+  renderMitigationPlan();
+}
+
+function renderMitigationPlan() {
+  var plan    = trafficAnalysisData && trafficAnalysisData.mitigation_plan;
+  var empty   = document.getElementById('mitig-empty');
+  var content = document.getElementById('mitig-content');
+  if (!plan) { empty.style.display = 'block'; content.style.display = 'none'; return; }
+  empty.style.display = 'none'; content.style.display = 'block';
+
+  // Service policy template: populate selector, auto-detect service type
+  var svcSel = document.getElementById('mitig-svc-type');
+  if (svcSel && !svcSel.options.length) {
+    svcSel.innerHTML = SVC_TYPES.map(function(t){ return '<option value="'+t+'">'+t+'</option>'; }).join('');
+  }
+  var detected = detectServiceType();
+  document.getElementById('mitig-svc-detected').textContent = 'Auto-detected: ' + detected;
+  renderServicePolicy(svcSel && svcSel.value && svcSel.dataset.userSet ? svcSel.value : detected);
+  if (svcSel) svcSel.onchange = function(){ this.dataset.userSet = '1'; renderServicePolicy(this.value); };
+
+  var o = plan.observed || {};
+  var obsItems = [
+    ['Avg Throughput', o.avg_mbps + ' Mbps'],
+    ['Avg Packet Rate', o.avg_kpps + ' Kpps'],
+    ['TCP Rate', o.tcp_pps + ' pps'],
+    ['UDP Rate', o.udp_pps + ' pps'],
+    ['ICMP Rate', o.icmp_pps + ' pps'],
+    ['Clean Baseline', o.baseline_mbps + ' Mbps / ' + o.baseline_kpps + ' Kpps'],
+    ['Total Sources', o.sources],
+    ['Offender IPs', o.offenders]
+  ];
+  document.getElementById('mitig-observed').innerHTML = obsItems.map(function(it){
+    return '<div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px;">'
+      +'<div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">'+it[0]+'</div>'
+      +'<div style="font-size:14px;font-weight:700;color:var(--cyan);">'+esc(String(it[1]))+'</div></div>';
+  }).join('');
+
+  var pipeInp = document.getElementById('mitig-pipe-input');
+  if (pipeInp && !pipeInp.value && getPipeMbps()) pipeInp.value = getPipeMbps();
+  renderProtectionContext(plan);
+  renderMitigFilterValues(plan);
+
+  var blocks = plan.block_candidates || [];
+  document.getElementById('mitig-blocks').innerHTML = blocks.length
+    ? '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">'
+      +'<thead><tr>'
+      +['#','Source IP','Block Score','Volume','PPS','Flows','Action','Reasons'].map(function(h){
+        return '<th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);color:var(--text2);font-size:11px;text-transform:uppercase;letter-spacing:.4px;">'+h+'</th>';
+      }).join('')+'</tr></thead><tbody>'
+      +blocks.map(function(b, i){
+        var actColor = b.is_cdn ? 'var(--orange)' : 'var(--red)';
+        return '<tr>'
+          +'<td style="padding:7px 8px;border-bottom:1px solid var(--border);color:var(--text2);">'+(i+1)+'</td>'
+          +'<td style="padding:7px 8px;border-bottom:1px solid var(--border);font-family:monospace;font-weight:700;">'+esc(b.ip)+'</td>'
+          +'<td style="padding:7px 8px;border-bottom:1px solid var(--border);font-weight:700;color:var(--red);">'+b.score+'</td>'
+          +'<td style="padding:7px 8px;border-bottom:1px solid var(--border);white-space:nowrap;">'+esc(b.bytes_fmt)+'</td>'
+          +'<td style="padding:7px 8px;border-bottom:1px solid var(--border);">'+b.pps+'</td>'
+          +'<td style="padding:7px 8px;border-bottom:1px solid var(--border);">'+b.flows+'</td>'
+          +'<td style="padding:7px 8px;border-bottom:1px solid var(--border);font-weight:700;color:'+actColor+';white-space:nowrap;">'+esc(b.action)+'</td>'
+          +'<td style="padding:7px 8px;border-bottom:1px solid var(--border);color:var(--text2);font-size:11px;line-height:1.5;">'+b.reasons.map(esc).join('; ')+'</td></tr>';
+      }).join('')+'</tbody></table></div>'
+    : '<div style="color:var(--green);font-size:13px;">No sources crossed the block-score threshold.</div>';
+
+  var nets = plan.network_blocks || [];
+  document.getElementById('mitig-networks').innerHTML = nets.length
+    ? nets.map(function(n){
+        return '<div style="border:1px solid var(--border);border-left:3px solid var(--orange);border-radius:6px;padding:10px 12px;margin-bottom:8px;">'
+          +'<div style="font-family:monospace;font-weight:700;font-size:13px;margin-bottom:4px;">'+esc(n.network)
+          +' <span style="font-size:11px;color:var(--orange);font-weight:600;">('+n.count+' offender IPs)</span></div>'
+          +'<div style="font-size:11px;color:var(--text2);font-family:monospace;">'+n.offenders.map(esc).join(', ')+'</div></div>';
+      }).join('')
+    : '<div style="color:var(--text2);font-size:13px;">No /24 subnet has 3+ offenders — per-IP blocking is sufficient.</div>';
+}
+
+// ── Protection context (prefixes / connection BW / attacked IPs) ──
+function ip4ToInt(ip) {
+  var p = ip.split('.');
+  if (p.length !== 4) return null;
+  var n = 0;
+  for (var i = 0; i < 4; i++) {
+    var o = parseInt(p[i], 10);
+    if (isNaN(o) || o < 0 || o > 255) return null;
+    n = n * 256 + o;
+  }
+  return n;
+}
+
+function ipInCidr(ip, cidr) {
+  var parts = cidr.trim().split('/');
+  var base = ip4ToInt(parts[0]), ipn = ip4ToInt(ip);
+  if (base === null || ipn === null) return false;
+  var bits = parts.length > 1 ? parseInt(parts[1], 10) : 32;
+  if (isNaN(bits) || bits < 0 || bits > 32) return false;
+  if (bits === 0) return true;
+  var div = Math.pow(2, 32 - bits);
+  return Math.floor(ipn / div) === Math.floor(base / div);
+}
+
+// Parses prefix entries. Accepted forms:
+//   "139.0.8.0/24"  explicit CIDR (enables coverage checks)
+//   "139.0.8.92"    bare IP -> /32
+//   "/29"           size only (anonymous prefix)
+//   "2x /28"        count x size
+function parsePrefixEntries(raw) {
+  var entries = [];
+  (raw || '').split('\n').forEach(function(line){
+    var s = line.trim();
+    if (!s) return;
+    var m = s.match(/^(\d+)\s*[xX]\s*\/(\d{1,2})$/);
+    if (m && +m[2] <= 32) { entries.push({count: +m[1], bits: +m[2], cidr: null}); return; }
+    m = s.match(/^\/(\d{1,2})$/);
+    if (m && +m[1] <= 32) { entries.push({count: 1, bits: +m[1], cidr: null}); return; }
+    m = s.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/);
+    if (m && +m[2] <= 32 && ip4ToInt(m[1]) !== null) { entries.push({count: 1, bits: +m[2], cidr: s}); return; }
+    m = s.match(/^(\d{1,3}(?:\.\d{1,3}){3})$/);
+    if (m && ip4ToInt(m[1]) !== null) { entries.push({count: 1, bits: 32, cidr: s + '/32'}); return; }
+    entries.push({invalid: s});
+  });
+  return entries;
+}
+
+function getPrefixEntries() {
+  return parsePrefixEntries(localStorage.getItem('mitigPrefixes') || '');
+}
+
+function getConnMbps() {
+  var v = parseFloat(localStorage.getItem('mitigConnMbps'));
+  return (v && v > 0) ? v : null;
+}
+
+function applyProtectionContext() {
+  var ta = document.getElementById('mitig-prefixes');
+  var ci = document.getElementById('mitig-conn-input');
+  if (ta) {
+    var bad = parsePrefixEntries(ta.value).filter(function(e){ return e.invalid; });
+    if (bad.length) {
+      alert('Invalid prefix entries: ' + bad.map(function(e){ return e.invalid; }).join(', ')
+        + '\nAccepted forms: 139.0.8.0/24 | /29 | 2x /28 | 139.0.8.92');
+      return;
+    }
+    if (ta.value.trim()) localStorage.setItem('mitigPrefixes', ta.value.trim());
+    else localStorage.removeItem('mitigPrefixes');
+  }
+  var cv = parseFloat(ci && ci.value);
+  if (cv && cv > 0) localStorage.setItem('mitigConnMbps', String(cv));
+  else localStorage.removeItem('mitigConnMbps');
+  var cl = document.getElementById('mitig-clean-input');
+  var clv = parseFloat(cl && cl.value);
+  if (clv && clv > 0) localStorage.setItem('mitigCleanMbps', String(clv));
+  else localStorage.removeItem('mitigCleanMbps');
+  renderMitigationPlan();
+}
+
+function getCleanTargetMbps() {
+  var v = parseFloat(localStorage.getItem('mitigCleanMbps'));
+  return (v && v > 0) ? v : null;
+}
+
+function renderProtectionContext(plan) {
+  var ta = document.getElementById('mitig-prefixes');
+  var ci = document.getElementById('mitig-conn-input');
+  if (ta && !ta.value && localStorage.getItem('mitigPrefixes')) ta.value = localStorage.getItem('mitigPrefixes');
+  if (ci && !ci.value && getConnMbps()) ci.value = getConnMbps();
+  var cl = document.getElementById('mitig-clean-input');
+  if (cl && !cl.value && getCleanTargetMbps()) cl.value = getCleanTargetMbps();
+
+  var entries    = getPrefixEntries().filter(function(e){ return !e.invalid; });
+  var explicit   = entries.filter(function(e){ return e.cidr; });
+  var anonCount  = entries.length - explicit.length;
+  var targets  = (trafficAnalysisData && trafficAnalysisData.targets && trafficAnalysisData.targets.ips) || [];
+  var attackedEl = document.getElementById('mitig-attacked');
+  var warnEl     = document.getElementById('mitig-ctx-warnings');
+  var warns = [];
+
+  // Protected-space summary: total IPs + breakdown by prefix length
+  var sumEl = document.getElementById('mitig-prefix-summary');
+  if (sumEl) {
+    if (entries.length) {
+      var totalIPs = 0, byBits = {};
+      entries.forEach(function(e){
+        totalIPs += e.count * Math.pow(2, 32 - e.bits);
+        byBits[e.bits] = (byBits[e.bits] || 0) + e.count;
+      });
+      var breakdown = Object.keys(byBits).sort(function(a,b){ return a - b; })
+        .map(function(b){ return byBits[b] + 'x /' + b; }).join(', ');
+      sumEl.innerHTML = 'Protected space: <b style="color:var(--cyan);">' + totalIPs.toLocaleString() + ' IPs</b> (' + breakdown + ')'
+        + (anonCount ? ' — ' + anonCount + ' size-only ' + (anonCount === 1 ? 'entry' : 'entries') + ', coverage check limited' : '');
+      if (totalIPs >= 64)
+        warns.push('CARPET BOMBING RISK: protected space spans ' + totalIPs.toLocaleString() + ' IPs — attackers can rotate destinations across the prefix to dodge per-host thresholds. Enable Zombie Network and Spoofed Carpet Bombing Mitigation (TCP Anti-Spoofing, TCP Data mode), and police at prefix level, not only per host.');
+    } else {
+      sumEl.textContent = '';
+    }
+  }
+
+  if (!targets.length) {
+    attackedEl.innerHTML = '<div style="font-size:12px;color:var(--text2);">No destination IPs detected.</div>';
+  } else {
+    attackedEl.innerHTML = targets.map(function(t){
+      var status = '', color = 'var(--border)';
+      if (explicit.length) {
+        var covered = explicit.some(function(e){ return ipInCidr(t.ip, e.cidr); });
+        if (covered) {
+          status = '<span style="font-size:10px;background:rgba(63,185,80,.15);color:var(--green);border-radius:3px;padding:2px 6px;font-weight:700;">PROTECTED</span>';
+          color = 'var(--green)';
+        } else if (anonCount) {
+          status = '<span style="font-size:10px;background:rgba(210,153,34,.15);color:var(--yellow);border-radius:3px;padding:2px 6px;font-weight:700;">UNVERIFIED</span>';
+          color = 'var(--yellow)';
+        } else {
+          status = '<span style="font-size:10px;background:rgba(248,81,73,.15);color:var(--red);border-radius:3px;padding:2px 6px;font-weight:700;">NOT COVERED</span>';
+          color = 'var(--red)';
+          warns.push('Attacked IP ' + t.ip + ' is NOT within the protected prefixes — clean-pipe mitigation will not apply to it. Verify the prefix list or the service subscription.');
+        }
+      }
+      return '<div style="display:flex;align-items:center;gap:8px;border:1px solid '+color+';border-radius:6px;padding:6px 10px;">'
+        +'<span style="font-family:monospace;font-weight:700;font-size:13px;">'+esc(t.ip)+'</span>'
+        +'<span style="font-size:11px;color:var(--text2);">'+t.flows+' flows</span>'+status+'</div>';
+    }).join('');
+    if (explicit.length) {
+      var coveredIPs = targets.filter(function(t){ return explicit.some(function(e){ return ipInCidr(t.ip, e.cidr); }); });
+      if (coveredIPs.length)
+        warns.push('POLICY SCOPE: apply the mitigation policy at Host profile level for ' + coveredIPs.map(function(t){ return t.ip; }).join(', ') + ' rather than the whole Site profile - tighter thresholds without affecting other prefixes.');
+    }
+  }
+
+  var pipe = getPipeMbps(), conn = getConnMbps();
+  if (pipe && conn && pipe > conn)
+    warns.push('Subscribed pipe (' + pipe + ' Mbps) exceeds the physical connection (' + conn + ' Mbps) - the link is the real ceiling. Recommended thresholds are capped by the connection bandwidth.');
+
+  warnEl.innerHTML = warns.map(function(w){
+    var isInfo = w.indexOf('POLICY SCOPE') === 0;
+    var c = isInfo ? 'var(--cyan)' : 'var(--orange)';
+    return '<div style="border:1px solid '+c+';border-left:3px solid '+c+';border-radius:6px;padding:8px 12px;margin-bottom:6px;font-size:12px;color:'+c+';line-height:1.5;">'+(isInfo?'ℹ ':'⚠ ')+esc(w)+'</div>';
+  }).join('');
+}
+
+// ── Pipe bandwidth (clean-pipe services) ──────────────────────────
+function getPipeMbps() {
+  var v = parseFloat(localStorage.getItem('mitigPipeMbps'));
+  return (v && v > 0) ? v : null;
+}
+
+function applyPipeBandwidth() {
+  var inp = document.getElementById('mitig-pipe-input');
+  var v = parseFloat(inp && inp.value);
+  if (v && v > 0) localStorage.setItem('mitigPipeMbps', String(v));
+  else localStorage.removeItem('mitigPipeMbps');
+  renderMitigationPlan();
+}
+
+function niceCeilJs(v) {
+  if (v <= 0) return 0;
+  var exp = Math.floor(Math.log10(v));
+  var mults = [1, 2, 5, 10];
+  for (var i = 0; i < mults.length; i++) {
+    var c = mults[i] * Math.pow(10, exp);
+    if (c >= v) return Math.round(c);
+  }
+  return Math.pow(10, exp + 1);
+}
+
+function renderMitigFilterValues(plan) {
+  var vals = (plan.filter_values || []).slice();
+  var o    = plan.observed || {};
+  var pipe = getPipeMbps();
+  var banner = '';
+
+  function chip(label, val, color) {
+    return '<span style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:4px 12px;">'
+      +'<span style="color:var(--text2);font-size:11px;">'+label+': </span>'
+      +'<b style="color:'+color+';">'+esc(String(val))+'</b></span>';
+  }
+  function warnBox(msg) {
+    return '<div style="border:1px solid var(--orange);border-left:3px solid var(--orange);border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:var(--orange);line-height:1.5;">⚠ '+esc(msg)+'</div>';
+  }
+
+  var conn = getConnMbps();
+  // Effective ceiling = the lower of subscribed pipe and physical connection
+  var eff = (pipe && conn) ? Math.min(pipe, conn) : (pipe || conn);
+  var effSrc = (pipe && conn) ? (pipe <= conn ? 'subscribed pipe' : 'physical connection')
+             : pipe ? 'subscribed pipe' : 'physical connection';
+  var cleanTarget = getCleanTargetMbps();
+  if (eff || cleanTarget) {
+    var avgPktB = (o.avg_kpps > 0) ? (o.avg_mbps * 1e6 / 8) / (o.avg_kpps * 1000) : 512;
+    // Traffic Policing = hard cap on residual (mixed) traffic delivered to the attacked destination.
+    // Priority: analyst-set clean traffic value > baseline x1.5. Pipe/connection is only an upper cap.
+    // Fair share per protected IP: the pipe serves the WHOLE protected space,
+    // so one attacked endpoint must not be able to consume the whole bandwidth.
+    var pfxEntries = getPrefixEntries().filter(function(e){ return !e.invalid; });
+    var totalIPs   = pfxEntries.reduce(function(s, e){ return s + e.count * Math.pow(2, 32 - e.bits); }, 0);
+    var fairShare  = (eff && totalIPs > 0) ? Math.max(Math.round(eff / totalIPs * 100) / 100, 0.01) : null;
+    var polMbps, polSrc;
+    if (cleanTarget) {
+      polMbps = cleanTarget;
+      polSrc  = 'analyst-set delivery cap (sized to the target\'s legitimate need)';
+    } else {
+      polMbps = Math.max(niceCeilJs((o.baseline_mbps || 0) * 1.5), 1);
+      polSrc  = 'clean baseline ' + o.baseline_mbps + ' Mbps x1.5 headroom';
+      if (fairShare && polMbps > fairShare) {
+        polMbps = fairShare;
+        polSrc  = 'per-IP fair share: ' + eff + ' Mbps (' + effSrc + ') / ' + totalIPs.toLocaleString()
+                + ' protected IPs — binding because it is tighter than the baseline-derived value';
+      } else if (fairShare) {
+        polSrc += ' (within per-IP fair share of ' + fairShare + ' Mbps)';
+      }
+    }
+    var capped = false;
+    if (eff && polMbps > eff * 0.95) { polMbps = Math.round(eff * 0.95); capped = true; }
+    var polKpps = niceCeilJs(polMbps * 1e6 / 8 / avgPktB / 1000);
+    vals = vals.filter(function(v){ return v.filter !== 'Traffic Policing'; });
+    vals.unshift({
+      filter: 'Traffic Policing', parameter: 'Delivery cap to endpoint',
+      recommended: polMbps + ' Mbps  /  ' + polKpps + ' Kpps',
+      rationale: 'Hard cap on RESIDUAL traffic delivered to the attacked IP - whatever passes earlier filters (mixed, not guaranteed clean) is shaped to this rate; the excess is dropped. Limits damage, does not clean the traffic. Based on ' + polSrc
+        + (capped ? '; capped at 95% of ' + effSrc + ' (' + eff + ' Mbps)' : '')
+        + '. Kpps from observed avg packet size (~' + Math.round(avgPktB) + ' B).',
+      pipeBased: true
+    });
+    banner = '<div style="display:flex;gap:10px;flex-wrap:wrap;font-size:12px;margin-bottom:10px;">'
+      + (pipe ? chip('Pipe', pipe + ' Mbps', 'var(--cyan)') : '')
+      + (conn ? chip('Connection', conn + ' Mbps', 'var(--cyan)') : '')
+      + chip('Policing (delivery cap)', polMbps + ' Mbps', 'var(--green)')
+      + (fairShare ? chip('Fair share / IP', fairShare + ' Mbps', 'var(--cyan)') : '');
+    if (eff) {
+      var util  = Math.round((o.avg_mbps || 0) / eff * 100);
+      var butil = Math.round((o.baseline_mbps || 0) / eff * 100);
+      banner += chip('Attack-period utilization', util + '%', util >= 100 ? 'var(--red)' : util >= 70 ? 'var(--orange)' : 'var(--green)')
+        + chip('Clean-baseline utilization', butil + '%', butil >= 80 ? 'var(--orange)' : 'var(--green)');
+    }
+    banner += '</div>';
+    if (cleanTarget && fairShare && cleanTarget > fairShare)
+      banner += warnBox('Analyst-set delivery cap (' + cleanTarget + ' Mbps) exceeds the per-IP fair share (' + eff + ' / ' + totalIPs.toLocaleString() + ' IPs = ' + fairShare + ' Mbps) — during a sustained attack this one target could consume other endpoints\' share of the pipe.');
+    if (eff && (o.avg_mbps || 0) > eff)
+      banner += warnBox('Attack traffic (' + o.avg_mbps + ' Mbps) exceeds the ' + effSrc + ' (' + eff + ' Mbps) — the link saturates before local filters act. Upstream/cloud scrubbing is required; local policing only protects devices behind the pipe.');
+    if (eff && !cleanTarget && (o.baseline_mbps || 0) > eff * 0.8)
+      banner += warnBox('Computed clean baseline (' + o.baseline_mbps + ' Mbps) is >=80% of the ' + effSrc + ' — likely contaminated by distributed attack traffic. Set "Delivery Cap to Target" in Protection Context to define the cap explicitly.');
+  } else {
+    banner = '<div style="font-size:11px;color:var(--text2);margin-bottom:10px;">💡 Enter your subscribed pipe bandwidth above for pipe-based Traffic Policing values and utilization checks (recommended for clean-pipe services).</div>';
+  }
+
+  var table = vals.length
+    ? '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">'
+      +'<thead><tr>'
+      +['Filter','Parameter','Recommended Value','Rationale'].map(function(h){
+        return '<th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);color:var(--text2);font-size:11px;text-transform:uppercase;letter-spacing:.4px;">'+h+'</th>';
+      }).join('')+'</tr></thead><tbody>'
+      +vals.map(function(v){
+        var rowBg = v.pipeBased ? 'background:rgba(88,166,255,.07);' : '';
+        return '<tr style="'+rowBg+'">'
+          +'<td style="padding:7px 8px;border-bottom:1px solid var(--border);font-weight:700;color:var(--cyan);white-space:nowrap;">'+esc(v.filter)+(v.pipeBased?' <span style="font-size:9px;background:var(--cyan);color:#000;border-radius:3px;padding:1px 5px;font-weight:800;">PIPE</span>':'')+'</td>'
+          +'<td style="padding:7px 8px;border-bottom:1px solid var(--border);">'+esc(v.parameter)+'</td>'
+          +'<td style="padding:7px 8px;border-bottom:1px solid var(--border);font-weight:700;color:var(--green);white-space:nowrap;">'+esc(v.recommended)+'</td>'
+          +'<td style="padding:7px 8px;border-bottom:1px solid var(--border);color:var(--text2);font-size:11px;line-height:1.5;">'+esc(v.rationale)+'</td></tr>';
+      }).join('')+'</tbody></table></div>'
+    : '<div style="color:var(--text2);font-size:13px;">No recommendations — traffic profile looks clean.</div>';
+
+  document.getElementById('mitig-values').innerHTML = banner + table;
+}
+
+function copyBlockList() {
+  var plan = trafficAnalysisData && trafficAnalysisData.mitigation_plan;
+  if (!plan || !(plan.block_candidates||[]).length) { alert('No block candidates.'); return; }
+  var txt = plan.block_candidates.map(function(b){ return b.ip; }).join('\n');
+  navigator.clipboard.writeText(txt).then(function(){ alert('Copied '+plan.block_candidates.length+' IPs to clipboard.'); },
+    function(){ prompt('Copy the IP list:', txt); });
+}
+
+function setTrafficOverallVerdict(v) {
+  trafficManualVerdict = v || null;
   recalcTrafficScore();
 }
 
@@ -3231,6 +4126,24 @@ function recalcTrafficScore() {
   });
   bonus = Math.min(bonus, 35);
   var newScore = Math.min(trafficBaseScore+bonus, 100);
+  // ── PCAP context: escalate the PCAP banner instead of the traffic one ──
+  if (invContext === 'pcap') {
+    if (!pcapData) return;
+    var pScoreEl = document.getElementById('pv-score');
+    if (!pScoreEl) return;
+    pScoreEl.textContent = 'Score: ' + newScore;
+    var pBonusStr = bonus>0 ? '  (+'+bonus+' from IP reputation)' : '';
+    document.getElementById('pv-sub').textContent =
+      trafficBaseIndicators+' indicator(s)  |  Attack score: '+newScore+'/100'+pBonusStr;
+    var pBanner = document.getElementById('pv-banner');
+    var pv = newScore>=55 ? 'ATTACK' : newScore>=30 ? 'SUSPICIOUS' : 'CLEAN';
+    pBanner.className = 'verdict-banner ' + (pv==='ATTACK'?'attack':pv==='SUSPICIOUS'?'suspicious':'clean');
+    document.getElementById('pv-icon').textContent  = pv==='ATTACK'?'🚨':pv==='SUSPICIOUS'?'⚠️':'✅';
+    document.getElementById('pv-label').textContent =
+      pv + ' — Confidence: ' + (newScore>=70||newScore<15?'HIGH':'MEDIUM')
+         + (bonus>0?' (IP reputation escalated)':'');
+    return;
+  }
   var scoreEl  = document.getElementById('tv-score');
   var subEl    = document.getElementById('tv-sub');
   var bannerEl = document.getElementById('tv-banner');
@@ -3238,6 +4151,14 @@ function recalcTrafficScore() {
   scoreEl.textContent = 'Score: '+newScore;
   var bonusStr = bonus>0 ? '  (+'+bonus+' from IP reputation)' : '';
   subEl.textContent = trafficBaseIndicators+' indicator(s) detected  |  Attack score: '+newScore+'/100'+bonusStr;
+  // Manual overall verdict override takes precedence over score thresholds
+  if (trafficManualVerdict) {
+    var mv = trafficManualVerdict;
+    bannerEl.className = 'verdict-banner ' + (mv==='ATTACK'?'attack':mv==='SUSPICIOUS'?'suspicious':'');
+    document.getElementById('tv-icon').textContent  = mv==='ATTACK'?'X':mv==='SUSPICIOUS'?'!':'S';
+    document.getElementById('tv-label').textContent = mv+' -- MANUAL OVERRIDE (analyst-set)';
+    return;
+  }
   if (newScore>=55) {
     bannerEl.className = 'verdict-banner attack';
     document.getElementById('tv-icon').textContent  = 'X';
@@ -3658,6 +4579,230 @@ document.addEventListener('DOMContentLoaded', function(){
   recalcThresholds();
   addPrefixRow(28); // seed one default prefix row
 });
+
+// ══════════════════ PCAP ANALYSIS ══════════════════
+var pcapData = null;
+
+function handlePcapDrop(e) {
+  e.preventDefault();
+  document.getElementById('pcap-drop-zone').classList.remove('drag');
+  if (e.dataTransfer.files.length) handlePcapFiles(e.dataTransfer.files);
+}
+
+function handlePcapFiles(fileList) {
+  if (!fileList.length) return;
+  var fd = new FormData();
+  for (var i = 0; i < fileList.length; i++) fd.append('pcap', fileList[i]);
+  var st = document.getElementById('pcap-upload-status');
+  st.style.display = 'block';
+  st.innerHTML = '<span class="spinner"></span> Parsing packets…';
+  document.getElementById('pcap-results').style.display = 'none';
+
+  fetch('/api/analyze/pcap', { method:'POST', body: fd })
+    .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
+    .then(function(res){
+      if (!res.ok || res.j.error) {
+        st.innerHTML = '<span style="color:var(--red);">✗ ' + esc(res.j.error || 'Analysis failed') + '</span>';
+        return;
+      }
+      st.style.display = 'none';
+      renderPcapResults(res.j);
+    })
+    .catch(function(err){
+      st.innerHTML = '<span style="color:var(--red);">✗ ' + esc(err.message) + '</span>';
+    });
+  document.getElementById('pcap-file-input').value = '';
+}
+
+function renderPcapResults(d) {
+  pcapData = d;
+  document.getElementById('pcap-results').style.display = 'block';
+
+  // Banner
+  var banner = document.getElementById('pv-banner');
+  banner.className = 'verdict-banner ' + (d.verdict==='ATTACK'?'attack': d.verdict==='SUSPICIOUS'?'suspicious':'clean');
+  document.getElementById('pv-icon').textContent  = d.verdict==='ATTACK'?'🚨': d.verdict==='SUSPICIOUS'?'⚠️':'✅';
+  document.getElementById('pv-label').textContent = d.verdict + ' — Confidence: ' + d.confidence;
+  var mergedNote = (d.merged_files && d.merged_files.length > 1)
+    ? '  |  ' + d.file_count + ' files (' + d.merged_files.join(', ') + ')'
+    : '  |  ' + esc(d.filename);
+  document.getElementById('pv-sub').textContent = d.indicators.length + ' indicator(s)  |  Attack score: ' + d.attack_score + '/100' + mergedNote;
+  document.getElementById('pv-score').textContent = 'Score: ' + d.attack_score;
+
+  // Indicators
+  document.getElementById('pv-indicators').innerHTML = d.indicators.length
+    ? d.indicators.map(function(ind){
+        return '<div class="indicator '+ind.severity+'">'
+          +'<div class="ind-title">'+ind.severity+' — '+ind.type.replace(/_/g,' ')+'</div>'
+          +'<div class="ind-detail">'+esc(ind.detail)+'</div></div>';
+      }).join('')
+    : '<div style="color:var(--green);font-size:13px;">No suspicious indicators found.</div>';
+
+  // Summary meta
+  var s = d.summary;
+  var dur = s.duration_seconds >= 60
+    ? Math.floor(s.duration_seconds/60)+'m '+Math.round(s.duration_seconds%60)+'s'
+    : s.duration_seconds+'s';
+  var metas = [
+    {v: s.total_packets.toLocaleString(), l:'Packets'},
+    {v: s.total_bytes_fmt,               l:'Total Bytes'},
+    {v: dur,                             l:'Duration'},
+    {v: s.avg_pps,                       l:'Avg pkt/s'},
+    {v: s.unique_sources,                l:'Unique Sources'},
+    {v: s.unique_destinations,           l:'Unique Destinations'},
+    {v: s.start_time,                    l:'First Packet'},
+    {v: s.end_time,                      l:'Last Packet'},
+  ];
+  document.getElementById('pv-meta').innerHTML = metas.map(function(m){
+    return '<div class="meta-card"><div class="mv" style="font-size:14px;">'+m.v+'</div><div class="ml">'+m.l+'</div></div>';
+  }).join('');
+
+  // Protocol dist
+  document.getElementById('pv-proto').innerHTML = Object.keys(d.protocol_dist).map(function(k){
+    var c = k==='TCP'?'var(--cyan)':k==='UDP'?'var(--yellow)':k==='ICMP'?'var(--orange)':'var(--text2)';
+    return '<span class="port-pill" style="border-color:'+c+';color:'+c+';">'+k+': '+d.protocol_dist[k]+'</span>';
+  }).join('');
+
+  // Flags
+  var fk = Object.keys(d.flag_dist);
+  document.getElementById('pv-flags').innerHTML = fk.length ? fk.map(function(k){
+    var c = k==='SYN'?'var(--red)':k.indexOf('RST')===0?'var(--orange)':k==='ACK'?'var(--cyan)':'var(--text2)';
+    return '<span class="port-pill" style="border-color:'+c+';color:'+c+';">'+k+': '+d.flag_dist[k]+'</span>';
+  }).join('') : '<span style="color:var(--text2);font-size:12px;">No TCP traffic</span>';
+
+  // Ports
+  document.getElementById('pv-ports').innerHTML = d.top_ports.map(function(p){
+    var cls = p.suspicious ? 'suspicious' : 'well-known';
+    var label = p.name ? ' ('+p.name+')' : '';
+    return '<span class="port-pill '+cls+'">'+p.port+label+': '+p.count+'</span>';
+  }).join('');
+
+  // Top sources / destinations
+  function topTable(sel, rows, total) {
+    document.querySelector(sel+' tbody').innerHTML = rows.map(function(r,i){
+      var pct = total ? (r.packets/total*100).toFixed(1) : 0;
+      return '<tr><td style="color:var(--text2);">'+(i+1)+'</td>'
+        +'<td style="font-family:monospace;font-size:12px;">'+esc(r.ip)+'</td>'
+        +'<td style="color:var(--red);font-weight:600;">'+r.packets+'</td>'
+        +'<td style="color:var(--text2);">'+r.bytes_fmt+'</td>'
+        +'<td><div style="display:flex;align-items:center;gap:6px;">'
+        +'<div class="top-bar" style="width:60px;"><div class="top-bar-fill" style="width:'+Math.min(pct,100)+'%;background:var(--red);"></div></div>'
+        +'<span style="font-size:11px;color:var(--text2);">'+pct+'%</span></div></td></tr>';
+    }).join('');
+  }
+  topTable('#pv-top-src', d.top_sources, s.total_packets);
+  topTable('#pv-top-dst', d.top_destinations, s.total_packets);
+
+  // Conversations (paginated)
+  pcapConvPage = 1;
+  renderPcapConversations();
+
+  // DNS
+  var dnsCard = document.getElementById('pv-dns-card');
+  if (d.dns_queries.length) {
+    dnsCard.style.display = 'block';
+    document.querySelector('#pv-dns tbody').innerHTML = d.dns_queries.map(function(q){
+      return '<tr><td style="font-family:monospace;font-size:12px;">'+esc(q.src)+'</td>'
+        +'<td style="font-family:monospace;font-size:12px;word-break:break-all;">'+esc(q.query)+'</td></tr>';
+    }).join('');
+  } else dnsCard.style.display = 'none';
+
+  // HTTP
+  var httpCard = document.getElementById('pv-http-card');
+  if (d.http_requests.length) {
+    httpCard.style.display = 'block';
+    document.querySelector('#pv-http tbody').innerHTML = d.http_requests.map(function(h){
+      return '<tr><td style="font-family:monospace;font-size:12px;">'+esc(h.src)+'</td>'
+        +'<td style="font-size:12px;">'+esc(h.host)+'</td>'
+        +'<td style="font-family:monospace;font-size:11px;word-break:break-all;">'+esc(h.request)+'</td>'
+        +'<td style="font-size:11px;color:var(--text2);word-break:break-all;">'+esc(h.user_agent)+'</td></tr>';
+    }).join('');
+  } else httpCard.style.display = 'none';
+
+  // ── Claim the shared Auto-Investigation panel for the PCAP context ──
+  invContext = 'pcap';
+  var invDiv = document.getElementById('tv-auto-inv');
+  document.getElementById('pcap-auto-inv-slot').appendChild(invDiv);
+  invDiv.style.display = 'block';
+
+  // Reset panel state for the new dataset (mirrors Traffic Analysis behavior)
+  trafficInvSpecificSelected = {};
+  var specPicker = document.getElementById('tv-inv-specific-picker');
+  if (specPicker) specPicker.style.display = 'none';
+  document.getElementById('tv-inv-mode-top').checked = true;
+  updateTrafficInvSpecificBadge();
+
+  var pool = d.all_sources || [];
+  var allLabel = document.getElementById('tv-inv-all-label');
+  if (allLabel) allLabel.textContent = 'All unique IPs (' + pool.length + ')';
+
+  trafficInvTop10Set = {};
+  pool.slice(0,10).forEach(function(r){ trafficInvTop10Set[r.ip] = true; });
+
+  // Reset previous results/filters
+  trafficInvAllResults     = [];
+  trafficInvManualVerdicts = {};
+  trafficInvSelected       = {};
+  trafficInvVerdictFilter  = 'ALL';
+  trafficInvSearchQuery    = '';
+  trafficInvTop10Filter    = false;
+  trafficBaseScore         = d.attack_score || 0;
+  trafficBaseIndicators    = (d.indicators || []).length;
+  trafficManualVerdict     = null;
+  document.getElementById('tv-inv-results').innerHTML = '';
+  document.getElementById('tv-inv-stats').style.display = 'none';
+  document.getElementById('tv-inv-filter-panel').style.display = 'none';
+  document.getElementById('tv-inv-bulk-bar').classList.remove('visible');
+  document.querySelectorAll('#tv-inv-verdict-filter-group .filter-btn').forEach(function(b,i){ b.classList.toggle('active', i===0); });
+  var srch = document.getElementById('tv-inv-ip-search'); if (srch) srch.value = '';
+  var t10btn = document.getElementById('tv-inv-top10-btn'); if (t10btn) t10btn.classList.remove('active');
+
+  // Auto-investigate using the current mode selection (default: Top 10) — same as Traffic Analysis
+  if (trafficInvAbortController) { trafficInvAbortController.abort(); trafficInvAbortController = null; }
+  if (pool.length) startAutoInvestigation(getInvIPsFromMode(pool));
+}
+
+// ── PCAP conversations pagination ──
+var pcapConvPage = 1;
+
+function renderPcapConversations() {
+  if (!pcapData) return;
+  var convs    = pcapData.conversations || [];
+  var pageSize = parseInt(document.getElementById('pv-conv-pagesize').value, 10) || 10;
+  var pages    = Math.max(1, Math.ceil(convs.length / pageSize));
+  if (pcapConvPage > pages) pcapConvPage = pages;
+  if (pcapConvPage < 1) pcapConvPage = 1;
+  var start = (pcapConvPage - 1) * pageSize;
+  var rows  = convs.slice(start, start + pageSize);
+
+  document.querySelector('#pv-convs tbody').innerHTML = rows.map(function(c, i){
+    return '<tr><td style="color:var(--text2);">'+(start+i+1)+'</td>'
+      +'<td style="font-family:monospace;font-size:12px;">'+esc(c.src)+'</td>'
+      +'<td style="color:var(--text2);">→</td>'
+      +'<td style="font-family:monospace;font-size:12px;">'+esc(c.dst)+'</td>'
+      +'<td>'+c.packets+'</td><td style="color:var(--text2);">'+c.bytes_fmt+'</td>'
+      +'<td>'+c.protos.map(function(p){ return '<span class="port-pill" style="font-size:10px;padding:1px 6px;">'+esc(p)+'</span>'; }).join(' ')+'</td></tr>';
+  }).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--text2);padding:20px;">No conversations</td></tr>';
+
+  // Pager
+  var pager = document.getElementById('pv-conv-pager');
+  if (pages <= 1) { pager.style.display = 'none'; return; }
+  pager.style.display = 'flex';
+  var btn = function(label, page, disabled, active) {
+    return '<button class="btn btn-secondary btn-sm" '
+      + (disabled ? 'disabled style="opacity:.4;cursor:default;font-size:11px;padding:3px 10px;"'
+                  : 'style="font-size:11px;padding:3px 10px;'+(active?'border-color:var(--cyan);color:var(--cyan);':'')+'" onclick="pcapConvPage='+page+';renderPcapConversations()"')
+      + '>'+label+'</button>';
+  };
+  var html = btn('‹ Prev', pcapConvPage-1, pcapConvPage===1, false);
+  // windowed page numbers (max 7 buttons)
+  var startP = Math.max(1, pcapConvPage-3), endP = Math.min(pages, startP+6);
+  startP = Math.max(1, endP-6);
+  for (var p = startP; p <= endP; p++) html += btn(p, p, false, p===pcapConvPage);
+  html += btn('Next ›', pcapConvPage+1, pcapConvPage===pages, false);
+  html += '<span style="font-size:11px;color:var(--text2);margin-left:8px;">'+convs.length+' conversations — page '+pcapConvPage+'/'+pages+'</span>';
+  pager.innerHTML = html;
+}
 
 fetch('/api/health').then(function(r){ return r.json(); }).then(function(d){
     if (!d.sources_configured) {

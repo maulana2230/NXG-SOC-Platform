@@ -5,6 +5,7 @@ Flask backend wrapping ip_investigator logic
 """
 
 import json
+import math
 import os
 import re
 import sys
@@ -12,7 +13,7 @@ import time
 import threading
 import ipaddress
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from flask import Flask, request, jsonify, send_from_directory, make_response, Response, stream_with_context, send_file
 from flask_cors import CORS
@@ -52,7 +53,10 @@ except ImportError:
 # ── Scoring weights (same as original) ───────────────────────────
 SC = {
     "abuse_conf_weight":        0.40,
-    "abuse_reports_bonus":      5,
+    "abuse_reports_weight":     4,     # per log2(1+reports) step
+    "abuse_reports_max":        20,    # cap for report-volume component
+    "abuse_distinct_bonus":     5,     # >= abuse_distinct_min unique reporters
+    "abuse_distinct_min":       10,
     "abuse_tor_bonus":          10,
     "vt_malicious_per_engine":  4,
     "vt_suspicious_per_engine": 1,
@@ -68,7 +72,54 @@ SC = {
     "ipapi_hosting_score":      0,
     "threatfox_ioc_per_hit":    8,
     "threatfox_max":            30,
+    # Dampening factor applied to OTX pulse score when the IP is whitelisted
+    # shared infrastructure (AbuseIPDB isWhitelisted / OTX validation).
+    # Pulse membership on Google/Cloudflare/Fastly IPs is co-occurrence
+    # (malware *contacting* the infra), not attribution.
+    "wl_otx_dampen":            0.25,
 }
+
+# ── Batch parallelism + per-source throttles ──────────────────────
+# IPs are investigated in parallel (BATCH_WORKERS at a time). Sources with
+# tight free-tier quotas are token-bucket throttled so parallel batches
+# don't trigger 429s (which would put keys on 1h failover cooldown):
+#   VirusTotal  free tier: 4 req/min  → 15.1s min interval PER KEY
+#   ip-api      free tier: 45 req/min → 1.4s min interval (global, IP-based)
+BATCH_WORKERS_DEFAULT = 5
+BATCH_WORKERS_MAX     = 10
+
+class RateLimiter:
+    """Thread-safe min-interval limiter (token bucket, capacity 1)."""
+    def __init__(self, min_interval):
+        self.min_interval = min_interval
+        self._lock = threading.Lock()
+        self._next_ok = 0.0
+    def wait(self):
+        if self.min_interval <= 0:
+            return
+        with self._lock:
+            now  = time.monotonic()
+            slot = max(now, self._next_ok)
+            self._next_ok = slot + self.min_interval
+        delay = slot - now
+        if delay > 0:
+            time.sleep(delay)
+    def next_free(self):
+        """When (monotonic ts) this limiter's next slot opens. For load balancing."""
+        with self._lock:
+            return self._next_ok
+
+VT_MIN_INTERVAL    = 15.1   # set to 0 if you have a paid VT key
+IPAPI_LIMITER      = RateLimiter(1.4)
+_VT_LIMITERS       = {}
+_VT_LIMITERS_LOCK  = threading.Lock()
+
+def vt_limiter(key):
+    """One limiter per VT key — multiple keys multiply effective throughput."""
+    with _VT_LIMITERS_LOCK:
+        if key not in _VT_LIMITERS:
+            _VT_LIMITERS[key] = RateLimiter(VT_MIN_INTERVAL)
+        return _VT_LIMITERS[key]
 
 SESSION = req_lib.Session()
 SESSION.mount("https://", HTTPAdapter(
@@ -97,7 +148,12 @@ def save_config(data):
 # directly under that field, plus an optional list of backup keys stored
 # under "<FIELD>_BACKUPS". When the primary key gets rate-limited, queries
 # automatically roll over to the next configured backup key.
+# Fields in ROTATE_FIELDS additionally load-balance across ALL keys on
+# every request (round-robin by limiter availability) instead of only
+# failing over on 429 — required for throttled sources like VT where the
+# limiter prevents 429s and would otherwise leave backup keys idle.
 BACKUP_SUFFIX = "_BACKUPS"
+ROTATE_FIELDS = {"VIRUSTOTAL_KEY"}
 
 def get_key_pool(cfg, field):
     """Return an ordered list of all non-empty API keys configured for a
@@ -149,7 +205,15 @@ def query_with_key_failover(field, cfg, fn):
         in_cooldown = cooldowns.get((field, k), 0) > now
         return (in_cooldown, k != last_good)
 
-    ordered = sorted(pool, key=sort_key)
+    if field in ROTATE_FIELDS:
+        # Least-loaded rotation instead of primary-first failover: pick the
+        # key whose rate-limit slot frees up soonest, so ALL configured keys
+        # share the load (N keys ≈ N× effective request rate). Keys on
+        # cooldown (daily quota exhausted) still sort last.
+        ordered = sorted(pool, key=lambda k: (cooldowns.get((field, k), 0) > now,
+                                              vt_limiter(k).next_free()))
+    else:
+        ordered = sorted(pool, key=sort_key)
 
     result = None
     for key in ordered:
@@ -176,6 +240,67 @@ def is_valid_ip(ip):
         return True
     except ValueError:
         return False
+
+def is_cidr(entry):
+    """True if entry is a CIDR prefix like 202.130.52.0/24 (not a bare IP)."""
+    entry = entry.strip()
+    if "/" not in entry:
+        return False
+    try:
+        ipaddress.ip_network(entry, strict=False)
+        return True
+    except ValueError:
+        return False
+
+# Safety cap on how many host IPs a single scan may expand to. A /20 = 4096
+# hosts. Bigger than this and free-tier TI quotas (AbuseIPDB ~1000/day) get
+# burned instantly, so we truncate and surface a note to the caller.
+MAX_CIDR_HOSTS = 4096
+
+def expand_targets(raw_ips):
+    """Expand a mixed list of bare IPs and CIDR prefixes into de-duplicated
+    host IPs. Returns (valid_ips, invalid, notes).
+
+    - CIDR (e.g. 202.130.52.0/24) expands to usable hosts (network/broadcast
+      excluded for prefixes shorter than /31; /31 and /32 keep all addresses).
+    - Expansion is capped at MAX_CIDR_HOSTS per prefix; overflow is truncated
+      and reported in notes.
+    """
+    valid_ips = []
+    invalid = []
+    notes = []
+    seen = set()
+
+    def _add(ip_str):
+        if ip_str not in seen:
+            seen.add(ip_str)
+            valid_ips.append(ip_str)
+
+    for entry in raw_ips:
+        entry = (entry or "").strip()
+        if not entry:
+            continue
+        if "/" in entry:
+            try:
+                net = ipaddress.ip_network(entry, strict=False)
+            except ValueError:
+                invalid.append(entry)
+                continue
+            hosts = list(net) if net.num_addresses <= 2 else list(net.hosts())
+            if len(hosts) > MAX_CIDR_HOSTS:
+                notes.append("{}: {} hosts, capped to first {}".format(
+                    entry, len(hosts), MAX_CIDR_HOSTS))
+                hosts = hosts[:MAX_CIDR_HOSTS]
+            else:
+                notes.append("{}: expanded to {} host(s)".format(entry, len(hosts)))
+            for h in hosts:
+                _add(str(h))
+        elif is_valid_ip(entry):
+            _add(entry.strip())
+        else:
+            invalid.append(entry)
+
+    return valid_ips, invalid, notes
 
 # ── Source queries (same logic as original script) ────────────────
 def q_abuse(ip, key):
@@ -205,12 +330,22 @@ def q_abuse(ip, key):
         r["ioc"].append("ISP: {}  |  Usage: {}".format(d.get("isp", "N/A"), d.get("usageType", "N/A")))
         if wl:
             r["score"] = -10
-            r["ioc"].append("Whitelisted (score reduced)")
+            r["whitelisted"] = True
+            r["ioc"].append("WHITELISTED by AbuseIPDB (shared infrastructure) — -10 pts offset applied")
             return r
         r["score"] += conf * SC["abuse_conf_weight"]
-        if total > 10:
-            r["score"] += SC["abuse_reports_bonus"]
-            r["ioc"].append("High report volume: {}".format(total))
+        # Report volume as an independent signal — log-scaled so it still
+        # contributes when abuseConfidenceScore has decayed to 0%.
+        if total > 0:
+            rep_score = min(SC["abuse_reports_weight"] * math.log2(1 + total),
+                            SC["abuse_reports_max"])
+            r["score"] += rep_score
+            r["ioc"].append("Report volume: {} reports (+{:.1f} pts)".format(total, rep_score))
+        distinct = d.get("numDistinctUsers", 0)
+        if distinct >= SC["abuse_distinct_min"]:
+            r["score"] += SC["abuse_distinct_bonus"]
+            r["ioc"].append("Reported by {} distinct users (+{} pts)".format(
+                distinct, SC["abuse_distinct_bonus"]))
         if is_tor:
             r["score"] += SC["abuse_tor_bonus"]
             r["ioc"].append("Tor Exit Node confirmed")
@@ -230,6 +365,7 @@ def q_vt(ip, key):
         r["error"] = "No API key"
         return r
     try:
+        vt_limiter(key).wait()
         resp = SESSION.get(
             "https://www.virustotal.com/api/v3/ip_addresses/{}".format(ip),
             headers={"x-apikey": key},
@@ -281,6 +417,12 @@ def q_otx(ip, key):
             r["error"] = "Invalid API key"
             return r
         gen = resp1.json()
+        # OTX "validation" entries mark known-good infra (e.g. Google, CDNs).
+        for val in gen.get("validation", []):
+            if "whitelist" in (str(val.get("source", "")) + str(val.get("name", ""))).lower():
+                r["whitelisted"] = True
+                r["ioc"].append("OTX verdict: Whitelisted ({})".format(val.get("message") or val.get("name") or "known-good infra"))
+                break
         resp2 = SESSION.get("{}/malware".format(base), headers=hdrs, timeout=15)
         if resp2.status_code == 429:
             r["error"] = "Rate limit exceeded (429)"
@@ -306,6 +448,11 @@ def q_otx(ip, key):
             r["ioc"].append("HIGH: {} threat intelligence pulses".format(pulse_count))
         elif pulse_count > 0:
             r["ioc"].append("{} threat intelligence pulses".format(pulse_count))
+        # OTX's own whitelist verdict overrides its pulse scoring: pulses on
+        # whitelisted shared infra are co-occurrence, not attribution.
+        if r.get("whitelisted") and r["score"] > 0:
+            r["ioc"].append("Pulse score zeroed ({} pts removed) — OTX validation marks this IP as whitelisted infrastructure".format(round(r["score"], 2)))
+            r["score"] = 0
     except Exception as e:
         r["error"] = str(e)
     return r
@@ -436,6 +583,7 @@ def q_greynoise(ip, key):
 def q_ipapi(ip):
     r = {"source": "ip-api", "score": 0, "ioc": [], "error": None}
     try:
+        IPAPI_LIMITER.wait()
         resp = SESSION.get(
             "http://ip-api.com/json/{}".format(ip),
             params={"fields": "status,message,country,countryCode,isp,org,as,proxy,hosting,query"},
@@ -525,6 +673,7 @@ def q_vt_hash(h, key):
         r["error"] = "No API key"
         return r
     try:
+        vt_limiter(key).wait()
         resp = SESSION.get(
             "https://www.virustotal.com/api/v3/files/{}".format(h),
             headers={"x-apikey": key},
@@ -760,7 +909,11 @@ def investigate_hash(h, cfg, active_sources=None):
     }
 
 def calc_verdict(results):
-    total = min(sum(max(r.get("score", 0), 0) for r in results), 100)
+    # Raw sum (not per-source clamp) so negative trust signals — AbuseIPDB
+    # whitelist (-10), GreyNoise benign (-5) — actually offset positive
+    # scores from noisier sources. Total still floored at 0, capped at 100.
+    total = max(min(sum(r.get("score", 0) for r in results), 100), 0)
+    total = round(total, 2)  # 2 decimals so total reconciles with displayed per-source pts
     if total >= 70:
         v = "MALICIOUS"
     elif total >= 45:
@@ -769,7 +922,55 @@ def calc_verdict(results):
         v = "SUSPICIOUS"
     else:
         v = "CLEAN"
-    return round(total, 1), v
+    return total, v
+
+# ══════════════════════════════════════════════════════════════════
+# TRAFFIC BEHAVIOR INVESTIGATION
+# Profiles an IP's observed behavior in the last analyzed traffic
+# capture (NetFlow CSV) and scores it as an additional intel source
+# layered on top of the threat-intelligence verdict.
+# ══════════════════════════════════════════════════════════════════
+_TRAFFIC_CACHE      = {"flows": [], "ts": None, "files": []}
+_TRAFFIC_CACHE_LOCK = threading.Lock()
+
+def cache_traffic_flows(flows, files=None):
+    with _TRAFFIC_CACHE_LOCK:
+        _TRAFFIC_CACHE["flows"] = flows
+        _TRAFFIC_CACHE["ts"]    = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        if files is not None:
+            _TRAFFIC_CACHE["files"] = files
+
+def q_behavior(ip):
+    """Informational traffic profile from the last analyzed capture:
+    the IP's share of total capture traffic and the bandwidth it
+    generated. Contributes NO points to the verdict — flow metadata
+    alone cannot establish maliciousness."""
+    r = {"source": "Traffic Behavior", "score": 0, "ioc": [], "error": None}
+    with _TRAFFIC_CACHE_LOCK:
+        flows  = _TRAFFIC_CACHE["flows"]
+        cap_ts = _TRAFFIC_CACHE["ts"]
+    if not flows:
+        r["error"] = "No traffic capture loaded — run Traffic Analysis first"
+        return r
+    mine = [f for f in flows if f["src_ip"] == ip]
+    if not mine:
+        r["ioc"].append("IP not seen as a source in loaded capture ({} flows analyzed, {})".format(len(flows), cap_ts))
+        return r
+
+    total_bytes = sum(f["bytes"] for f in flows) or 1
+    my_bytes    = sum(f["bytes"]   for f in mine)
+    my_pkts     = sum(f["packets"] for f in mine)
+    share       = my_bytes / total_bytes
+
+    ts_all     = [f["timestamp"] for f in mine if f["timestamp"] > 0]
+    duration_s = max((max(ts_all) - min(ts_all)) if len(ts_all) > 1 else 0, 1)
+    avg_mbps   = (my_bytes * 8 / duration_s) / 1_000_000
+
+    r["ioc"].append("Traffic share: {:.2f}% of total capture bytes".format(share * 100))
+    r["ioc"].append("Bandwidth: {} total | avg {:.2f} Mbps over {}s window".format(
+        fmt_bytes(my_bytes), avg_mbps, duration_s))
+    r["ioc"].append("{} flows | {} pkts".format(len(mine), fmt_pkts(my_pkts)))
+    return r
 
 SOURCE_URLS = {
     "AbuseIPDB":       "https://www.abuseipdb.com/check/{ip}",
@@ -781,7 +982,7 @@ SOURCE_URLS = {
     "ip-api":          "https://ip-api.com/#{ip}",
 }
 
-ALL_SOURCES = ["abuseipdb", "virustotal", "otx", "hybrid", "greynoise", "ipapi", "threatfox"]
+ALL_SOURCES = ["abuseipdb", "virustotal", "otx", "hybrid", "greynoise", "ipapi", "threatfox", "behavior"]
 
 def investigate(ip, cfg, active_sources=None):
     """active_sources: list of source ids to query. None = all configured sources."""
@@ -789,7 +990,11 @@ def investigate(ip, cfg, active_sources=None):
         active_sources = ALL_SOURCES
 
     tasks = {}
-    with ThreadPoolExecutor(max_workers=7) as ex:
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        # Behavior layer: only runs when a traffic capture is loaded, so
+        # plain TI investigations don't get a noisy "no capture" card.
+        if "behavior" in active_sources and _TRAFFIC_CACHE["flows"]:
+            tasks["behavior"] = ex.submit(q_behavior, ip)
         if "abuseipdb" in active_sources and get_key_pool(cfg, "ABUSEIPDB_KEY"):
             tasks["abuse"] = ex.submit(query_with_key_failover, "ABUSEIPDB_KEY", cfg, lambda k: q_abuse(ip, k))
         if "virustotal" in active_sources and get_key_pool(cfg, "VIRUSTOTAL_KEY"):
@@ -815,6 +1020,21 @@ def investigate(ip, cfg, active_sources=None):
                 results.append(res if res is not None else {"source": k, "score": 0, "ioc": [], "error": "No API key"})
             except Exception as e:
                 results.append({"source": k, "score": 0, "ioc": [], "error": str(e)})
+
+    # ── Whitelist dampening (cross-source) ─────────────────────────
+    # If any source marks the IP as whitelisted shared infrastructure,
+    # dampen the OTX pulse contribution: pulses list IPs that malware
+    # *contacted*, which for Google/CDN infra is co-occurrence, not
+    # attribution (MITRE ATT&CK T1102 abuse of legitimate web services).
+    wl_by = [r["source"] for r in results if r.get("whitelisted")]
+    if wl_by:
+        for r in results:
+            if r["source"] == "AlienVault OTX" and r.get("score", 0) > 0:
+                orig = r["score"]
+                r["score"] = round(orig * SC["wl_otx_dampen"], 2)
+                r["ioc"].append("Score dampened {:.1f} → {:.1f} pts: IP whitelisted by {} (pulse hits on shared infra are co-occurrence)".format(
+                    orig, r["score"], ", ".join(wl_by)))
+
     score, v = calc_verdict(results)
     return {
         "ip": ip,
@@ -967,18 +1187,17 @@ def api_investigate():
     if isinstance(raw_ips, str):
         raw_ips = [x.strip() for x in raw_ips.replace(",", "\n").splitlines() if x.strip()]
 
-    valid_ips = [ip for ip in raw_ips if is_valid_ip(ip)]
-    invalid   = [ip for ip in raw_ips if not is_valid_ip(ip)]
+    valid_ips, invalid, expansion_notes = expand_targets(raw_ips)
 
     if not valid_ips:
         return jsonify({"error": "No valid IP addresses provided", "invalid": invalid}), 400
 
     cfg = load_config()
     active_sources = data.get("active_sources", None)  # None = use all configured
-    results = []
-    for ip in valid_ips:
-        result = investigate(ip, cfg, active_sources)
-        results.append(result)
+    workers = min(max(int(data.get("parallel", BATCH_WORKERS_DEFAULT)), 1),
+                  BATCH_WORKERS_MAX, len(valid_ips))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(lambda ip: investigate(ip, cfg, active_sources), valid_ips))
 
     summary = {
         "total": len(results),
@@ -992,6 +1211,7 @@ def api_investigate():
         "results": results,
         "summary": summary,
         "invalid_ips": invalid,
+        "expansion_notes": expansion_notes,
     })
 
 @app.route("/api/investigate/stream", methods=["POST"])
@@ -1005,8 +1225,7 @@ def api_investigate_stream():
     if isinstance(raw_ips, str):
         raw_ips = [x.strip() for x in raw_ips.replace(",", "\n").splitlines() if x.strip()]
 
-    valid_ips = [ip for ip in raw_ips if is_valid_ip(ip)]
-    invalid   = [ip for ip in raw_ips if not is_valid_ip(ip)]
+    valid_ips, invalid, expansion_notes = expand_targets(raw_ips)
 
     if not valid_ips:
         return jsonify({"error": "No valid IP addresses provided"}), 400
@@ -1014,24 +1233,36 @@ def api_investigate_stream():
     cfg            = load_config()
     active_sources = data.get("active_sources", None)
     total          = len(valid_ips)
+    workers        = min(max(int(data.get("parallel", BATCH_WORKERS_DEFAULT)), 1),
+                         BATCH_WORKERS_MAX, total)
 
     def generate():
         # Send initial metadata
         yield "data: {}\n\n".format(json.dumps({
-            "type": "start", "total": total, "invalid": invalid
+            "type": "start", "total": total, "invalid": invalid, "workers": workers,
+            "expansion_notes": expansion_notes
         }))
         results = []
-        for idx, ip in enumerate(valid_ips, 1):
-            result = investigate(ip, cfg, active_sources)
-            results.append(result)
-            pct = round(idx / total * 100)
-            yield "data: {}\n\n".format(json.dumps({
-                "type": "result",
-                "index": idx,
-                "total": total,
-                "percent": pct,
-                "result": result,
-            }))
+        # Parallel across IPs; results stream in completion order. Per-source
+        # rate limiters (VT, ip-api) keep us inside free-tier quotas.
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = {pool.submit(investigate, ip, cfg, active_sources): ip for ip in valid_ips}
+            for idx, fut in enumerate(as_completed(futs), 1):
+                try:
+                    result = fut.result()
+                except Exception as e:
+                    result = {"ip": futs[fut], "score": 0, "verdict": "CLEAN",
+                              "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                              "sources": [], "error": str(e)}
+                results.append(result)
+                pct = round(idx / total * 100)
+                yield "data: {}\n\n".format(json.dumps({
+                    "type": "result",
+                    "index": idx,
+                    "total": total,
+                    "percent": pct,
+                    "result": result,
+                }))
         summary = {
             "total":     len(results),
             "malicious": sum(1 for r in results if r["verdict"] == "MALICIOUS"),
@@ -1344,16 +1575,26 @@ def api_investigate_hash_stream():
     active_sources = data.get("active_sources", None)
     total          = len(valid)
 
+    workers = min(max(int(data.get("parallel", BATCH_WORKERS_DEFAULT)), 1),
+                  BATCH_WORKERS_MAX, total)
+
     def generate():
-        yield "data: {}\n\n".format(json.dumps({"type": "start", "total": total, "invalid": invalid}))
+        yield "data: {}\n\n".format(json.dumps({"type": "start", "total": total, "invalid": invalid, "workers": workers}))
         results = []
-        for idx, h in enumerate(valid, 1):
-            result = investigate_hash(h, cfg, active_sources)
-            results.append(result)
-            pct = round(idx / total * 100)
-            yield "data: {}\n\n".format(json.dumps({
-                "type": "result", "index": idx, "total": total, "percent": pct, "result": result,
-            }))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = {pool.submit(investigate_hash, h, cfg, active_sources): h for h in valid}
+            for idx, fut in enumerate(as_completed(futs), 1):
+                try:
+                    result = fut.result()
+                except Exception as e:
+                    result = {"hash": futs[fut], "hash_type": "UNKNOWN", "score": 0, "verdict": "CLEAN",
+                              "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                              "file_info": {}, "sources": [], "error": str(e)}
+                results.append(result)
+                pct = round(idx / total * 100)
+                yield "data: {}\n\n".format(json.dumps({
+                    "type": "result", "index": idx, "total": total, "percent": pct, "result": result,
+                }))
         summary = {
             "total":      len(results),
             "malicious":  sum(1 for r in results if r["verdict"] == "MALICIOUS"),
@@ -1384,6 +1625,95 @@ def health():
 
 import csv as csv_mod
 from collections import Counter, defaultdict
+
+# ── Mitigation recommendations (NetShield filter mapping) ─────────
+# Maps each attack indicator type to recommended mitigation filters,
+# ordered by the NetShield mitigation sequence (Allow/Blocklist → NTIF →
+# Bogons → Anti-Flood → FlexFilter → Zombie → Traffic Policing).
+MITIGATION_MAP = {
+    "SYN_FLOOD": {
+        "filter": "TCP Anti-Flood",
+        "actions": [
+            "Enable TCP Anti-Spoofing in 'TCP Retransmission' mode (Half-Open Validation) to drop spoofed SYNs",
+            "Enable 'TCP SYN with Reserved Flags' and 'TCP SYN with Data' malformed-packet rules",
+            "If attack persists, configure Traffic Policing (SYN/SYN-ACK) thresholds for Total / Validated / Suspicious IPs",
+        ],
+    },
+    "LAYER7_HTTP_FLOOD": {
+        "filter": "L7 HTTP / SSL-TLS Anti-Flood",
+        "actions": [
+            "Create an L7 protection profile for the targeted HTTP/HTTPS ports",
+            "Enable TCP Connection Protection (Source IP New/Half-Open/Idle/Total Connection rules) in Ratelimit or Block mode",
+            "Enable HTTP Authentication challenge (302 redirect or JavaScript) to eliminate bot/spoofed sources",
+            "For HTTPS targets: enable SSL/TLS Session (per Source IP) and SSL/TLS Traffic Shaping",
+        ],
+    },
+    "UDP_PORT443_ABUSE": {
+        "filter": "L7 QUIC Anti-Flood + UDP Anti-Flood",
+        "actions": [
+            "Create a QUIC protection profile for UDP/443: enable Malformed Packets rule and QUIC Flood Authentication (Retry-token validation)",
+            "Enable Ratelimit (per Session) and Session (per Source IP) sub-rules",
+            "If traffic is not legitimate HTTP/3, drop UDP/443 entirely via FlexFilter Basic Network Filtering",
+        ],
+    },
+    "UDP_MIXED_ATTACK": {
+        "filter": "NTIF + UDP Anti-Flood + S.M.A.RT",
+        "actions": [
+            "Set NTIF Botnet/DDoS-attacks and Botnet/Reputation sub-categories to Drop mode",
+            "Enable UDP Fragmentation, UDP Payload Attack, and 'Drop all 0's Attack Pattern' rules",
+            "Enable S.M.A.RT filter (Amplification Attacks + Threat Intelligence categories) for reflection/amplification vectors",
+        ],
+    },
+    "CDN_REFLECTION": {
+        "filter": "FlexFilter + Zombie",
+        "actions": [
+            "Do NOT blanket-blocklist CDN ranges — legitimate traffic also originates there",
+            "Use FlexFilter Basic Network Filtering to rate-limit the specific source/destination/port pattern observed",
+            "Enable Zombie Host ratelimit to slow aggressive CDN-origin sources without full blocking",
+            "Review origin-server exposure: restrict origin to accept traffic only from your CDN provider's published ranges",
+        ],
+    },
+    "DISTRIBUTED_SOURCES": {
+        "filter": "NTIF + Zombie Network + Geo Blocklist",
+        "actions": [
+            "Set NTIF Botnet/DDoS-attacks sub-category to Drop mode (botnet-sourced distributed floods)",
+            "Enable Zombie Network rule (/24 ratelimit or block) against aggressive source networks",
+            "Apply country Blocklist for regions with no business operations",
+        ],
+    },
+    "TRAFFIC_CONCENTRATION": {
+        "filter": "Blocklist / Zombie Host",
+        "actions": [
+            "Verify the top source IP via threat intel (auto-investigation), then add to IP Blocklist if malicious",
+            "Alternatively enable Zombie Host Block mode for the offending source with a defined block duration",
+        ],
+    },
+    "NONSTANDARD_PORTS": {
+        "filter": "FlexFilter / Custom Anti-Flood",
+        "actions": [
+            "If the ports serve no legitimate service: drop them via FlexFilter Basic Network Filtering",
+            "If the ports are legitimate custom services: create a Custom Anti-Flood profile with TCP Connection Protection",
+        ],
+    },
+    "ANOMALOUS_FLOW_SIZE": {
+        "filter": "Protocol Anti-Flood + Traffic Policing",
+        "actions": [
+            "Enable Protocol Anti-Flood TCP/UDP Ratelimit to cap per-protocol throughput",
+            "Configure Traffic Policing as the final safeguard to shape residual traffic to a safe delivery rate",
+        ],
+    },
+}
+
+BASELINE_MITIGATION = {
+    "indicator": "BASELINE",
+    "severity":  "INFO",
+    "filter":    "Baseline hardening",
+    "actions": [
+        "Enable Bogons filter (Martian Address + Land Attack) — always safe",
+        "Allowlist trusted corporate/partner IP ranges so they bypass aggressive filters",
+        "Keep Traffic Policing enabled as the last line of defense",
+    ],
+}
 
 CDN_PREFIXES = [
     ("142.250.", "Google"), ("142.251.", "Google"), ("74.125.", "Google"),
@@ -1427,12 +1757,205 @@ def fmt_bytes(b):
     if b >= 1e3: return "{:.1f} KB".format(b / 1e3)
     return "{} B".format(b)
 
+def fmt_bps(v):
+    for u in ("bps", "Kbps", "Mbps"):
+        if v < 1000:
+            return "{:.1f} {}".format(v, u)
+        v /= 1000.0
+    return "{:.2f} Gbps".format(v)
+
+def fmt_pps(v):
+    for u in ("pps", "Kpps"):
+        if v < 1000:
+            return "{:.1f} {}".format(v, u)
+        v /= 1000.0
+    return "{:.2f} Mpps".format(v)
+
 def fmt_pkts(p):
     if p >= 1e6: return "{:.2f}M".format(p / 1e6)
     if p >= 1e3: return "{:.1f}K".format(p / 1e3)
     return str(p)
 
-def analyze_traffic_csv(file_content):
+# ── Deep mitigation plan (Mitigation Optimization page) ──────────
+def _nice_ceil(v):
+    """Round up to a 'nice' config number: 1/2/5 x 10^n."""
+    if v <= 0:
+        return 0
+    exp = math.floor(math.log10(v))
+    for m in (1, 2, 5, 10):
+        cand = m * (10 ** exp)
+        if cand >= v:
+            return int(cand)
+    return int(10 ** (exp + 1))
+
+
+def build_mitigation_plan(flows, total_bytes, total_packets):
+    """Compute concrete mitigation values: block candidates, policing
+    thresholds, and per-filter parameter recommendations."""
+    timestamps = [f["timestamp"] for f in flows if f["timestamp"] > 0]
+    duration_s = max((max(timestamps) - min(timestamps)), 1) if len(timestamps) > 1 else 1
+
+    avg_mbps = total_bytes * 8 / duration_s / 1e6
+    avg_kpps = total_packets / duration_s / 1e3
+
+    proto_pkts = defaultdict(int)
+    for f in flows:
+        proto_pkts[f["protocol"]] += f["packets"]
+    tcp_pps  = proto_pkts.get(6, 0)  / duration_s
+    udp_pps  = proto_pkts.get(17, 0) / duration_s
+    icmp_pps = proto_pkts.get(1, 0)  / duration_s
+
+    # ── Per-source stats & block scoring ──────────────────────────
+    standard_ports = {80, 443, 8080, 8443, 53, 853}
+    src_stats = {}
+    for f in flows:
+        s = src_stats.setdefault(f["src_ip"], {
+            "bytes": 0, "packets": 0, "flows": 0,
+            "syn": 0, "tcp": 0, "udp443": 0, "ns_ports": set()})
+        s["bytes"]   += f["bytes"]
+        s["packets"] += f["packets"]
+        s["flows"]   += 1
+        if f["protocol"] == 6:
+            s["tcp"] += 1
+            if f["flags"] == 2:
+                s["syn"] += 1
+        if f["protocol"] == 17 and f["dst_port"] == 443:
+            s["udp443"] += 1
+        if f["dst_port"] not in standard_ports and f["dst_port"] > 0:
+            s["ns_ports"].add(f["dst_port"])
+
+    candidates = []
+    for ip, s in src_stats.items():
+        score, reasons = 0, []
+        byte_share = s["bytes"] / total_bytes if total_bytes else 0
+        if byte_share > 0.02:
+            score += min(byte_share * 200, 40)
+            reasons.append("{:.1f}% of total volume".format(byte_share * 100))
+        if s["tcp"] >= 5 and s["syn"] / s["tcp"] > 0.6:
+            score += 25
+            reasons.append("SYN-dominant ({}/{} TCP flows)".format(s["syn"], s["tcp"]))
+        if s["udp443"] >= 5:
+            score += 20
+            reasons.append("{} UDP/443 flows (QUIC/reflection abuse)".format(s["udp443"]))
+        if len(s["ns_ports"]) >= 5:
+            score += 15
+            reasons.append("targets {} non-standard ports (scanning pattern)".format(len(s["ns_ports"])))
+        pps = s["packets"] / duration_s
+        if pps > 1000:
+            score += 10
+            reasons.append("sustained {:.0f} pps".format(pps))
+        if score >= 20:
+            cdn = is_cdn_ip(ip)
+            candidates.append({
+                "ip": ip, "score": round(score, 1),
+                "bytes": s["bytes"], "bytes_fmt": fmt_bytes(s["bytes"]),
+                "flows": s["flows"], "pps": round(pps, 1),
+                "reasons": reasons, "is_cdn": cdn,
+                "action": "Ratelimit (CDN — do not hard-block)" if cdn else "Block",
+            })
+    candidates.sort(key=lambda c: c["score"], reverse=True)
+    block_candidates = candidates[:10]
+
+    # ── /24 aggregation (Zombie Network targets) ──────────────────
+    net_groups = defaultdict(list)
+    for c in candidates:
+        if "." in c["ip"] and ":" not in c["ip"]:
+            net_groups[".".join(c["ip"].split(".")[:3]) + ".0/24"].append(c["ip"])
+    network_blocks = [
+        {"network": n, "offenders": ips, "count": len(ips)}
+        for n, ips in sorted(net_groups.items(), key=lambda x: len(x[1]), reverse=True)
+        if len(ips) >= 3
+    ][:5]
+
+    # ── Clean baseline (traffic excluding offenders) ──────────────
+    offender_ips = set(c["ip"] for c in candidates)
+    clean_bytes  = sum(s["bytes"]   for ip, s in src_stats.items() if ip not in offender_ips)
+    clean_pkts   = sum(s["packets"] for ip, s in src_stats.items() if ip not in offender_ips)
+    baseline_mbps = clean_bytes * 8 / duration_s / 1e6
+    baseline_kpps = clean_pkts / duration_s / 1e3
+    pol_mbps = _nice_ceil(max(baseline_mbps * 1.5, 1))
+    pol_kpps = _nice_ceil(max(baseline_kpps * 1.5, 1))
+
+    clean_tcp_pps = sum(f["packets"] for f in flows
+                        if f["protocol"] == 6  and f["src_ip"] not in offender_ips) / duration_s
+    clean_udp_pps = sum(f["packets"] for f in flows
+                        if f["protocol"] == 17 and f["src_ip"] not in offender_ips) / duration_s
+    tcp_limit = _nice_ceil(max(clean_tcp_pps * 1.5, 100))
+    udp_limit = _nice_ceil(max(clean_udp_pps * 1.5, 100))
+
+    clean_src_pps = sorted(s["packets"] / duration_s
+                           for ip, s in src_stats.items() if ip not in offender_ips)
+    p95 = clean_src_pps[int(len(clean_src_pps) * 0.95)] if clean_src_pps else 0
+    zombie_pps = _nice_ceil(max(p95 * 2, 50))
+
+    # Per-source flows/minute → TCP Connection Protection threshold
+    flows_per_min = sorted(s["flows"] / (duration_s / 60.0)
+                           for ip, s in src_stats.items() if ip not in offender_ips)
+    fpm95 = flows_per_min[int(len(flows_per_min) * 0.95)] if flows_per_min else 0
+    conn_limit = _nice_ceil(max(fpm95 * 2, 30))
+
+    filter_values = [
+        {"filter": "Traffic Policing", "parameter": "Throughput limit",
+         "recommended": "{} Mbps  /  {} Kpps".format(pol_mbps, pol_kpps),
+         "rationale": "Clean baseline {:.1f} Mbps / {:.1f} Kpps (excluding {} offender IPs) + 50% headroom, rounded up".format(
+             baseline_mbps, baseline_kpps, len(offender_ips))},
+        {"filter": "Protocol Anti-Flood", "parameter": "TCP Ratelimit",
+         "recommended": "{} pps".format(tcp_limit),
+         "rationale": "Clean TCP baseline {:.0f} pps + 50% headroom (attack-period total: {:.0f} pps)".format(
+             clean_tcp_pps, tcp_pps)},
+        {"filter": "Protocol Anti-Flood", "parameter": "UDP Ratelimit",
+         "recommended": "{} pps".format(udp_limit),
+         "rationale": "Clean UDP baseline {:.0f} pps + 50% headroom (attack-period total: {:.0f} pps)".format(
+             clean_udp_pps, udp_pps)},
+        {"filter": "Zombie Host", "parameter": "Per-source ratelimit",
+         "recommended": "{} pps".format(zombie_pps),
+         "rationale": "2x the 95th-percentile clean per-source rate ({:.0f} pps)".format(p95)},
+        {"filter": "TCP Connection Protection", "parameter": "Total Connection (per src IP / min)",
+         "recommended": "{} connections/min".format(conn_limit),
+         "rationale": "2x the 95th-percentile clean per-source flow rate ({:.0f} flows/min)".format(fpm95)},
+    ]
+
+    syn_pps = sum(f["packets"] for f in flows
+                  if f["protocol"] == 6 and f["flags"] == 2) / duration_s
+    if syn_pps > 100:
+        filter_values.append({
+            "filter": "TCP Anti-Spoofing", "parameter": "Mode",
+            "recommended": "TCP Retransmission (Half-Open Validation)",
+            "rationale": "SYN rate {:.0f} pps observed — retransmission challenge drops spoofed sources; "
+                         "add Traffic Policing (SYN) at ~{} pps".format(syn_pps, _nice_ceil(max(syn_pps * 0.1, 100)))})
+    udp443_flows = sum(1 for f in flows if f["protocol"] == 17 and f["dst_port"] == 443)
+    if udp443_flows > 50:
+        filter_values.append({
+            "filter": "QUIC Anti-Flood", "parameter": "QUIC Flood sub-rules",
+            "recommended": "Authentication ON; Session 2000 pps/src; Ratelimit 30 new sessions/s/src",
+            "rationale": "{} UDP/443 flows observed — Retry-token authentication rejects spoofed QUIC initials "
+                         "(values are NetShield defaults; tighten if abuse persists)".format(udp443_flows)})
+    if icmp_pps > 100:
+        filter_values.append({
+            "filter": "ICMP Anti-Flood", "parameter": "Drop all ICMP traffic",
+            "recommended": "ON",
+            "rationale": "ICMP at {:.0f} pps — ICMP is not used for data exchange; safe to drop during attack".format(icmp_pps)})
+
+    return {
+        "observed": {
+            "duration_s":  duration_s,
+            "avg_mbps":    round(avg_mbps, 2),
+            "avg_kpps":    round(avg_kpps, 2),
+            "tcp_pps":     round(tcp_pps, 1),
+            "udp_pps":     round(udp_pps, 1),
+            "icmp_pps":    round(icmp_pps, 1),
+            "baseline_mbps": round(baseline_mbps, 2),
+            "baseline_kpps": round(baseline_kpps, 2),
+            "sources":     len(src_stats),
+            "offenders":   len(offender_ips),
+        },
+        "block_candidates": block_candidates,
+        "network_blocks":   network_blocks,
+        "filter_values":    filter_values,
+    }
+
+
+def analyze_traffic_csv(file_content, cache_files=None):
     flows = []
     try:
         text = file_content.decode("utf-8", errors="replace")
@@ -1460,6 +1983,10 @@ def analyze_traffic_csv(file_content):
     if not flows:
         return {"error": "No valid flow rows found. Expected format: flags,profile,dst_port,src_port,src_ip,dst_ip,bytes,packets,proto,router,metric,timestamp"}
 
+    # Cache parsed flows so IP investigations can layer traffic-behavior
+    # scoring (q_behavior) on top of threat intelligence.
+    cache_traffic_flows(flows, cache_files)
+
     total_bytes   = sum(f["bytes"]   for f in flows)
     total_packets = sum(f["packets"] for f in flows)
 
@@ -1472,6 +1999,44 @@ def analyze_traffic_csv(file_content):
     top10_bytes       = sorted(src_bytes.items(),   key=lambda x: x[1], reverse=True)[:10]
     top10_packets     = sorted(src_packets.items(), key=lambda x: x[1], reverse=True)[:10]
     all_sources_bytes = sorted(src_bytes.items(),   key=lambda x: x[1], reverse=True)
+
+    # ── Peak rate per source (Nexusguard-style bps/pps) ───────────
+    # NetFlow records are aggregated per export interval, so bucket by
+    # timestamp and estimate the interval from the median gap between
+    # distinct export timestamps. Peak = a source's busiest bucket.
+    bkt_bytes = defaultdict(lambda: defaultdict(int))  # ts -> src -> bytes
+    bkt_pkts  = defaultdict(lambda: defaultdict(int))
+    for f in flows:
+        if f["timestamp"] > 0:
+            bkt_bytes[f["timestamp"]][f["src_ip"]] += f["bytes"]
+            bkt_pkts[f["timestamp"]][f["src_ip"]]  += f["packets"]
+    ts_sorted = sorted(bkt_bytes.keys())
+    gaps = [b - a for a, b in zip(ts_sorted, ts_sorted[1:]) if b > a]
+    interval = sorted(gaps)[len(gaps) // 2] if gaps else 1  # median gap, fallback 1s
+    peak_bps, peak_pps = {}, {}
+    for ts, per_src in bkt_bytes.items():
+        for s, v in per_src.items():
+            r = v * 8.0 / interval
+            if r > peak_bps.get(s, 0): peak_bps[s] = r
+    for ts, per_src in bkt_pkts.items():
+        for s, v in per_src.items():
+            r = v / float(interval)
+            if r > peak_pps.get(s, 0): peak_pps[s] = r
+    # Percentage basis = network peak rate (busiest bucket total), matching
+    # Nexusguard's methodology: "at its peak, this source equaled X% of the
+    # network's peak traffic rate."
+    net_peak_bps = max((sum(s.values()) for s in bkt_bytes.values()), default=0) * 8.0 / interval or 1
+    net_peak_pps = max((sum(s.values()) for s in bkt_pkts.values()),  default=0) / float(interval) or 1
+    top10_peak_bps = [
+        {"ip": s, "rate": round(r, 1), "rate_fmt": fmt_bps(r),
+         "pct": round(r / net_peak_bps * 100, 2),
+         "total_fmt": fmt_bytes(src_bytes[s]), "cdn": get_cdn_org(s) or ""}
+        for s, r in sorted(peak_bps.items(), key=lambda x: x[1], reverse=True)[:10]]
+    top10_peak_pps = [
+        {"ip": s, "rate": round(r, 1), "rate_fmt": fmt_pps(r),
+         "pct": round(r / net_peak_pps * 100, 2),
+         "total_fmt": fmt_pkts(src_packets[s]), "cdn": get_cdn_org(s) or ""}
+        for s, r in sorted(peak_pps.items(), key=lambda x: x[1], reverse=True)[:10]]
 
     dst_ip_counter   = Counter(f["dst_ip"]   for f in flows)
     dst_port_counter = Counter(f["dst_port"] for f in flows)
@@ -1608,12 +2173,28 @@ def analyze_traffic_csv(file_content):
             else:              _psd["1500+"]     += 1
     _psd_total = sum(_psd.values()) or 1
 
+    # Build mitigation recommendations from detected indicators
+    mitigations = []
+    for ind in indicators:
+        m = MITIGATION_MAP.get(ind["type"])
+        if m:
+            mitigations.append({
+                "indicator": ind["type"],
+                "severity":  ind["severity"],
+                "filter":    m["filter"],
+                "actions":   m["actions"],
+            })
+    if mitigations:
+        mitigations.append(BASELINE_MITIGATION)
+
     return {
         "verdict":      verdict,
         "confidence":   confidence,
         "color":        color,
         "attack_score": attack_score,
         "indicators":   indicators,
+        "mitigations":  mitigations,
+        "mitigation_plan": build_mitigation_plan(flows, total_bytes, total_packets),
         "pkt_size_dist": {"labels": _psd_labels, "data": {k: {"count": v, "pct": round(v/_psd_total*100,1)} for k,v in _psd.items()}},
         "summary": {
             "total_flows":    len(flows),
@@ -1648,6 +2229,9 @@ def analyze_traffic_csv(file_content):
              "cdn": get_cdn_org(ip) or ""}
             for ip, p in top10_packets
         ],
+        "top10_peak_bps": top10_peak_bps,
+        "top10_peak_pps": top10_peak_pps,
+        "rate_interval_s": interval,
         "protocol_dist": dict(proto_counter),
         "flag_dist":     dict(flag_counter),
     }
@@ -1673,13 +2257,36 @@ def api_analyze_traffic():
         file_names.append(f.filename or "unnamed.csv")
 
     merged_content = b"".join(merged_chunks)
-    result = analyze_traffic_csv(merged_content)
+    result = analyze_traffic_csv(merged_content, cache_files=file_names)
     if "error" in result:
         return jsonify(result), 400
 
     result["merged_files"] = file_names
     result["file_count"]   = len(files)
     return jsonify(result)
+
+
+@app.route("/api/investigate/behavior", methods=["POST"])
+def api_investigate_behavior():
+    """Standalone traffic-behavior investigation for one or more IPs,
+    profiled against the last analyzed traffic capture."""
+    data = request.get_json() or {}
+    raw_ips = data.get("ips", [])
+    if isinstance(raw_ips, str):
+        raw_ips = [x.strip() for x in raw_ips.replace(",", "\n").splitlines() if x.strip()]
+    valid_ips = [ip for ip in raw_ips if is_valid_ip(ip)]
+    if not valid_ips:
+        return jsonify({"error": "No valid IP addresses provided"}), 400
+    with _TRAFFIC_CACHE_LOCK:
+        cap = {"flows": len(_TRAFFIC_CACHE["flows"]), "ts": _TRAFFIC_CACHE["ts"],
+               "files": _TRAFFIC_CACHE["files"]}
+    results = []
+    for ip in valid_ips:
+        b = q_behavior(ip)
+        b["ip"] = ip
+        b["score"] = round(b.get("score", 0), 2)
+        results.append(b)
+    return jsonify({"results": results, "capture": cap})
 
 
 
@@ -1819,6 +2426,9 @@ def build_traffic_pdf(payload):
     if "override_score" in payload:
         traffic = dict(traffic)  # shallow copy — don't mutate original
         traffic["attack_score"] = payload["override_score"]
+    if "override_confidence" in payload:
+        traffic = dict(traffic)
+        traffic["confidence"] = payload["override_confidence"]
     if "override_verdict" in payload:
         traffic = dict(traffic)
         traffic["verdict"] = payload["override_verdict"]
@@ -1932,6 +2542,42 @@ def build_traffic_pdf(payload):
             ("GRID",          (0,0), (-1,-1), 0.4, COL_BORDER),
         ]))
         story.append(ind_t)
+        story.append(Spacer(1, 5*mm))
+
+    # ── Mitigation Recommendations (opt-in via include_mitigations) ─
+    mitigations = traffic.get("mitigations", [])
+    if payload.get("include_mitigations") and mitigations:
+        story.append(section_header("MITIGATION RECOMMENDATIONS  (NetShield)"))
+        story.append(Spacer(1, 2*mm))
+        sev_col = {"HIGH": COL_RED, "MEDIUM": COL_ORANGE, "LOW": COL_YELLOW}
+        mit_rows = [["Indicator", "Filter", "Recommended Actions"]]
+        for m in mitigations:
+            sev = m.get("severity", "")
+            act = "<br/>".join("•  " + a for a in m.get("actions", []))
+            mit_rows.append([
+                Paragraph(m.get("indicator", "").replace("_", " "),
+                          ps("mi"+m.get("indicator","")[:6], fontName="Helvetica-Bold",
+                             fontSize=7.5, textColor=sev_col.get(sev, COL_TEXT2))),
+                Paragraph(m.get("filter", ""),
+                          ps("mf"+m.get("indicator","")[:6], fontName="Helvetica-Bold",
+                             fontSize=7.5, textColor=COL_TEXT)),
+                Paragraph(act, ps("ma"+m.get("indicator","")[:6], fontSize=7.5,
+                                  textColor=COL_TEXT2, leading=11)),
+            ])
+        mit_t = Table(mit_rows, colWidths=[W*0.18, W*0.22, W*0.60], repeatRows=1)
+        mit_t.setStyle(TableStyle([
+            ("BACKGROUND",    (0,0), (-1,0), BG_CARD),
+            ("TEXTCOLOR",     (0,0), (-1,0), COL_TEXT2),
+            ("FONTNAME",      (0,0), (-1,0), "Helvetica-Bold"),
+            ("FONTSIZE",      (0,0), (-1,0), 7.5),
+            ("ROWBACKGROUNDS",(0,1), (-1,-1), [BG_ROW, BG_CARD]),
+            ("VALIGN",        (0,0), (-1,-1), "TOP"),
+            ("TOPPADDING",    (0,0), (-1,-1), 6),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+            ("LEFTPADDING",   (0,0), (-1,-1), 6),
+            ("GRID",          (0,0), (-1,-1), 0.4, COL_BORDER),
+        ]))
+        story.append(mit_t)
         story.append(Spacer(1, 5*mm))
 
     # ── Targets ───────────────────────────────────────────────────
@@ -2192,5 +2838,385 @@ def export_traffic_pdf():
         return jsonify({"error": str(e)}), 500
 
 
-if __name__ == "__main__":
+# ══════════════════════════════════════════════════════════════════
+#  PCAP ANALYSIS  (pure-Python parser — no scapy/tshark dependency)
+# ══════════════════════════════════════════════════════════════════
+import struct
+
+PCAP_SUSPICIOUS_PORTS = {
+    23:   "Telnet", 445: "SMB", 3389: "RDP", 4444: "Metasploit default",
+    1433: "MSSQL", 3306: "MySQL", 5900: "VNC", 6667: "IRC/botnet C2",
+    135:  "MS-RPC", 139: "NetBIOS", 21: "FTP", 69: "TFTP",
+    5060: "SIP", 25: "SMTP", 8333: "Bitcoin", 9001: "Tor ORPort",
+}
+PCAP_PORT_NAMES = {
+    80: "HTTP", 443: "HTTPS", 53: "DNS", 22: "SSH", 23: "Telnet", 21: "FTP",
+    25: "SMTP", 110: "POP3", 143: "IMAP", 445: "SMB", 3389: "RDP",
+    3306: "MySQL", 1433: "MSSQL", 8080: "HTTP-alt", 8443: "HTTPS-alt",
+    123: "NTP", 161: "SNMP", 389: "LDAP", 636: "LDAPS", 5900: "VNC",
+}
+TCP_FLAG_BITS = [(0x01, "FIN"), (0x02, "SYN"), (0x04, "RST"),
+                 (0x08, "PSH"), (0x10, "ACK"), (0x20, "URG")]
+
+
+def _tcp_flag_label(flags):
+    if flags & 0x02 and not flags & 0x10: return "SYN"
+    if flags & 0x02 and flags & 0x10:     return "SYN+ACK"
+    if flags & 0x04:                      return "RST" if not flags & 0x10 else "RST+ACK"
+    if flags & 0x01:                      return "FIN"
+    if flags & 0x08 and flags & 0x10:     return "PSH+ACK"
+    if flags & 0x10:                      return "ACK"
+    return "OTHER"
+
+
+def _iter_pcap_packets(data):
+    """Yield (ts_float, raw_bytes, orig_len) from classic pcap OR pcapng."""
+    if len(data) < 4:
+        return
+    magic = data[:4]
+    # ── classic pcap ──
+    if magic in (b"\xd4\xc3\xb2\xa1", b"\xa1\xb2\xc3\xd4",
+                 b"\x4d\x3c\xb2\xa1", b"\xa1\xb2\x3c\x4d"):
+        big    = magic in (b"\xa1\xb2\xc3\xd4", b"\xa1\xb2\x3c\x4d")
+        nano   = magic in (b"\x4d\x3c\xb2\xa1", b"\xa1\xb2\x3c\x4d")
+        e      = ">" if big else "<"
+        off    = 24
+        div    = 1e9 if nano else 1e6
+        while off + 16 <= len(data):
+            ts_s, ts_f, incl, orig = struct.unpack(e + "IIII", data[off:off+16])
+            off += 16
+            if incl > len(data) - off:
+                break
+            yield ts_s + ts_f / div, data[off:off+incl], orig
+            off += incl
+        return
+    # ── pcapng ──
+    if magic == b"\x0a\x0d\x0d\x0a":
+        off = 0
+        endian = "<"
+        if_tsres = []  # per-interface timestamp resolution divisor
+        while off + 12 <= len(data):
+            btype = struct.unpack(endian + "I", data[off:off+4])[0]
+            if btype == 0x0A0D0D0A:  # SHB — re-detect endianness
+                bom = data[off+8:off+12]
+                endian = "<" if bom == b"\x4d\x3c\x2b\x1a" else ">"
+                if_tsres = []
+                btype = struct.unpack(endian + "I", data[off:off+4])[0]
+            blen = struct.unpack(endian + "I", data[off+4:off+8])[0]
+            if blen < 12 or off + blen > len(data):
+                break
+            body = data[off+8:off+blen-4]
+            if btype == 0x00000001:  # IDB
+                tsres = 1e6
+                oo = 8
+                while oo + 4 <= len(body):
+                    ocode, olen = struct.unpack(endian + "HH", body[oo:oo+4])
+                    if ocode == 0:
+                        break
+                    oval = body[oo+4:oo+4+olen]
+                    if ocode == 9 and olen >= 1:  # if_tsresol
+                        v = oval[0]
+                        tsres = float(2 ** (v & 0x7F)) if v & 0x80 else float(10 ** v)
+                    oo += 4 + ((olen + 3) // 4) * 4
+                if_tsres.append(tsres)
+            elif btype == 0x00000006 and len(body) >= 20:  # EPB
+                iface, ts_hi, ts_lo, cap_len, orig = struct.unpack(endian + "IIIII", body[:20])
+                res = if_tsres[iface] if iface < len(if_tsres) else 1e6
+                ts = ((ts_hi << 32) | ts_lo) / res
+                yield ts, body[20:20+cap_len], orig
+            off += blen
+
+
+def _parse_dns_qname(payload, qoff):
+    labels, guard = [], 0
+    while qoff < len(payload) and guard < 40:
+        ln = payload[qoff]
+        if ln == 0 or ln >= 0xC0:
+            break
+        labels.append(payload[qoff+1:qoff+1+ln].decode("ascii", "replace"))
+        qoff += 1 + ln
+        guard += 1
+    return ".".join(labels)
+
+
+def analyze_pcap(data, filename="capture.pcap"):
+    """Full-packet analysis of a pcap/pcapng byte blob → dict for the UI."""
+    pkt_count = 0
+    total_bytes = 0
+    ts_min, ts_max = None, None
+    proto_dist   = Counter()
+    flag_dist    = Counter()
+    src_stats    = defaultdict(lambda: {"packets": 0, "bytes": 0})
+    dst_stats    = defaultdict(lambda: {"packets": 0, "bytes": 0})
+    dst_ports    = Counter()
+    convs        = defaultdict(lambda: {"packets": 0, "bytes": 0, "protos": set()})
+    syn_per_src  = Counter()
+    synack_seen  = Counter()
+    dports_per_src = defaultdict(set)
+    dips_per_src   = defaultdict(set)
+    dns_queries  = []
+    http_requests = []
+    truncated    = 0
+    non_ip       = 0
+
+    for ts, raw, orig in _iter_pcap_packets(data):
+        pkt_count += 1
+        total_bytes += orig
+        ts_min = ts if ts_min is None else min(ts_min, ts)
+        ts_max = ts if ts_max is None else max(ts_max, ts)
+        if orig > len(raw):
+            truncated += 1
+        if len(raw) < 14:
+            non_ip += 1
+            continue
+        eth_type = struct.unpack(">H", raw[12:14])[0]
+        off = 14
+        if eth_type == 0x8100 and len(raw) >= 18:  # 802.1Q VLAN
+            eth_type = struct.unpack(">H", raw[16:18])[0]
+            off = 18
+        if eth_type == 0x0806:
+            proto_dist["ARP"] += 1
+            continue
+        if eth_type == 0x86DD:  # IPv6 — basic accounting only
+            proto_dist["IPv6"] += 1
+            continue
+        if eth_type != 0x0800 or len(raw) < off + 20:
+            non_ip += 1
+            proto_dist["Other"] += 1
+            continue
+
+        ihl   = (raw[off] & 0x0F) * 4
+        proto = raw[off+9]
+        src   = ".".join(str(b) for b in raw[off+12:off+16])
+        dst   = ".".join(str(b) for b in raw[off+16:off+20])
+        l4    = off + ihl
+
+        src_stats[src]["packets"] += 1; src_stats[src]["bytes"] += orig
+        dst_stats[dst]["packets"] += 1; dst_stats[dst]["bytes"] += orig
+        dips_per_src[src].add(dst)
+
+        if proto == 6 and len(raw) >= l4 + 14:
+            proto_dist["TCP"] += 1
+            sport, dport = struct.unpack(">HH", raw[l4:l4+4])
+            flags = raw[l4+13]
+            flag_dist[_tcp_flag_label(flags)] += 1
+            dst_ports[dport] += 1
+            dports_per_src[src].add(dport)
+            if flags & 0x02 and not flags & 0x10:
+                syn_per_src[src] += 1
+            if flags & 0x02 and flags & 0x10:
+                synack_seen[dst] += 1  # dst of SYN+ACK = original SYN sender
+            key = (src, dst)
+            convs[key]["packets"] += 1; convs[key]["bytes"] += orig
+            convs[key]["protos"].add("TCP/" + str(dport))
+            # HTTP request sniff
+            doff = (raw[l4+12] >> 4) * 4
+            payload = raw[l4+doff:]
+            if payload[:4] in (b"GET ", b"POST", b"HEAD", b"PUT ", b"DELE", b"OPTI"):
+                try:
+                    head = payload[:512].decode("ascii", "replace")
+                    line1 = head.split("\r\n")[0]
+                    host  = ""
+                    ua    = ""
+                    for ln in head.split("\r\n")[1:]:
+                        low = ln.lower()
+                        if low.startswith("host:"):       host = ln[5:].strip()
+                        elif low.startswith("user-agent:"): ua = ln[11:].strip()
+                    http_requests.append({"src": src, "dst": dst, "dport": dport,
+                                          "request": line1[:200], "host": host[:100],
+                                          "user_agent": ua[:150]})
+                except Exception:
+                    pass
+        elif proto == 17 and len(raw) >= l4 + 8:
+            proto_dist["UDP"] += 1
+            sport, dport = struct.unpack(">HH", raw[l4:l4+4])
+            dst_ports[dport] += 1
+            dports_per_src[src].add(dport)
+            key = (src, dst)
+            convs[key]["packets"] += 1; convs[key]["bytes"] += orig
+            convs[key]["protos"].add("UDP/" + str(dport))
+            if dport == 53 and len(raw) >= l4 + 8 + 12:
+                dpl = raw[l4+8:]
+                if len(dpl) >= 13 and (dpl[2] & 0x80) == 0:  # query
+                    qname = _parse_dns_qname(dpl, 12)
+                    if qname:
+                        dns_queries.append({"src": src, "query": qname[:150]})
+        elif proto == 1:
+            proto_dist["ICMP"] += 1
+            key = (src, dst)
+            convs[key]["packets"] += 1; convs[key]["bytes"] += orig
+            convs[key]["protos"].add("ICMP")
+        else:
+            proto_dist["Other"] += 1
+
+    if pkt_count == 0:
+        return {"error": "No packets parsed. File may be corrupt or an unsupported "
+                         "format (expected .pcap or .pcapng with Ethernet link type)."}
+
+    duration = round((ts_max - ts_min), 2) if ts_max and ts_min else 0
+
+    # ── Threat indicators ──────────────────────────────────────────
+    indicators = []
+    score = 0
+
+    def add(sev, typ, detail, pts):
+        nonlocal score
+        indicators.append({"severity": sev, "type": typ, "detail": detail})
+        score += pts
+
+    total_tcp = proto_dist.get("TCP", 0)
+    syn_total = flag_dist.get("SYN", 0)
+    rst_total = flag_dist.get("RST", 0) + flag_dist.get("RST+ACK", 0)
+
+    # Port scan: one source probing many distinct ports
+    for ip, ports in dports_per_src.items():
+        if len(ports) >= 10:
+            add("HIGH", "PORT_SCAN",
+                f"{ip} probed {len(ports)} distinct destination ports — vertical port scan behavior (MITRE T1046).", 30)
+        elif len(ports) >= 5:
+            add("MEDIUM", "PORT_PROBE",
+                f"{ip} contacted {len(ports)} distinct destination ports.", 12)
+
+    # Network sweep: one source hitting many distinct hosts
+    for ip, dips in dips_per_src.items():
+        if len(dips) >= 10:
+            add("HIGH", "NETWORK_SWEEP",
+                f"{ip} contacted {len(dips)} distinct hosts — horizontal sweep / lateral-movement recon (MITRE T1018).", 25)
+
+    # SYN flood pattern: many SYNs, few completions
+    if total_tcp >= 10 and syn_total >= max(5, total_tcp * 0.5):
+        completions = sum(synack_seen.values())
+        if completions < syn_total * 0.3:
+            add("HIGH", "SYN_FLOOD_PATTERN",
+                f"{syn_total} SYN packets vs {completions} SYN+ACK responses — half-open connection pattern consistent with SYN flood or aggressive scanning (MITRE T1499).", 30)
+
+    # High RST ratio — rejected/aborted connections
+    if total_tcp >= 10 and rst_total >= total_tcp * 0.3:
+        add("MEDIUM", "HIGH_RST_RATIO",
+            f"{rst_total}/{total_tcp} TCP packets are RST — connections being rejected or torn down, common during scans and failed exploitation.", 15)
+
+    # Many unique sources hitting one destination (dDoS/scan target)
+    top_dst = max(dst_stats.items(), key=lambda kv: kv[1]["packets"]) if dst_stats else None
+    uniq_src = len(src_stats)
+    if top_dst and uniq_src >= 10:
+        dst_share = top_dst[1]["packets"] / pkt_count
+        if dst_share >= 0.7:
+            add("HIGH", "MANY_TO_ONE",
+                f"{uniq_src} distinct sources targeting {top_dst[0]} ({round(dst_share*100)}% of all packets) — distributed scan or DDoS pattern.", 25)
+
+    # Suspicious destination ports
+    hit_susp = [(p, c) for p, c in dst_ports.items() if p in PCAP_SUSPICIOUS_PORTS]
+    for p, c in sorted(hit_susp, key=lambda x: -x[1])[:5]:
+        add("MEDIUM", "SUSPICIOUS_PORT",
+            f"Port {p} ({PCAP_SUSPICIOUS_PORTS[p]}) contacted {c} time(s) — commonly abused service port.", 8)
+
+    # DNS anomalies (possible tunneling / DGA)
+    long_q = [q for q in dns_queries if len(q["query"]) > 60]
+    if long_q:
+        add("MEDIUM", "DNS_LONG_QUERY",
+            f"{len(long_q)} DNS quer(ies) exceed 60 chars (e.g. {long_q[0]['query'][:60]}…) — possible DNS tunneling/exfiltration (MITRE T1071.004).", 15)
+
+    # Plaintext HTTP with unusual UA
+    for h in http_requests:
+        ua = h["user_agent"].lower()
+        if any(t in ua for t in ("curl", "python", "wget", "nikto", "sqlmap", "masscan", "nmap", "zgrab")):
+            add("MEDIUM", "SCANNER_USER_AGENT",
+                f"HTTP request from {h['src']} with tool-like User-Agent: {h['user_agent'][:80]}", 10)
+
+    if truncated:
+        add("LOW", "TRUNCATED_CAPTURE",
+            f"{truncated} packet(s) truncated by snaplen — payload analysis is partial.", 0)
+
+    score = min(score, 100)
+    verdict = "ATTACK" if score >= 55 else "SUSPICIOUS" if score >= 30 else "CLEAN"
+    confidence = "HIGH" if score >= 70 or score < 15 else "MEDIUM"
+
+    def top_list(stats, n=10):
+        rows = sorted(stats.items(), key=lambda kv: -kv[1]["packets"])[:n]
+        return [{"ip": ip, "packets": v["packets"], "bytes": v["bytes"],
+                 "bytes_fmt": fmt_bytes(v["bytes"])} for ip, v in rows]
+
+    conv_rows = sorted(convs.items(), key=lambda kv: -kv[1]["packets"])[:200]
+    conversations = [{"src": k[0], "dst": k[1], "packets": v["packets"],
+                      "bytes_fmt": fmt_bytes(v["bytes"]),
+                      "protos": sorted(v["protos"])[:6]} for k, v in conv_rows]
+
+    port_rows = dst_ports.most_common(12)
+    top_ports = [{"port": p, "name": PCAP_PORT_NAMES.get(p, ""),
+                  "count": c, "suspicious": p in PCAP_SUSPICIOUS_PORTS}
+                 for p, c in port_rows]
+
+    return {
+        "filename": filename,
+        "verdict": verdict,
+        "attack_score": score,
+        "confidence": confidence,
+        "indicators": indicators,
+        "summary": {
+            "total_packets": pkt_count,
+            "total_bytes": total_bytes,
+            "total_bytes_fmt": fmt_bytes(total_bytes),
+            "duration_seconds": duration,
+            "start_time": datetime.fromtimestamp(ts_min, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC") if ts_min else "-",
+            "end_time":   datetime.fromtimestamp(ts_max, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC") if ts_max else "-",
+            "unique_sources": len(src_stats),
+            "unique_destinations": len(dst_stats),
+            "avg_pps": round(pkt_count / duration, 1) if duration else pkt_count,
+            "truncated_packets": truncated,
+        },
+        "protocol_dist": dict(proto_dist),
+        "flag_dist": dict(flag_dist),
+        "top_sources": top_list(src_stats),
+        "top_destinations": top_list(dst_stats),
+        "top_ports": top_ports,
+        "conversations": conversations,
+        "dns_queries": dns_queries[:25],
+        "http_requests": http_requests[:25],
+        "unique_source_ips": sorted(src_stats.keys(),
+                                    key=lambda ip: -src_stats[ip]["packets"]),
+        # full source list (sorted by packets desc) — feeds the auto-investigation picker
+        "all_sources": [{"ip": ip, "packets": v["packets"], "bytes": v["bytes"],
+                         "bytes_fmt": fmt_bytes(v["bytes"])}
+                        for ip, v in sorted(src_stats.items(),
+                                            key=lambda kv: -kv[1]["packets"])],
+    }
+
+
+@app.route("/api/analyze/pcap", methods=["POST"])
+def api_analyze_pcap():
+    files = request.files.getlist("pcap")
+    if not files:
+        return jsonify({"error": "No PCAP file uploaded. Send multipart field 'pcap'."}), 400
+
+    results, names, total_size = [], [], 0
+    for f in files:
+        blob = f.read()
+        total_size += len(blob)
+        if total_size > 50 * 1024 * 1024:
+            return jsonify({"error": "Combined file size too large (max 50 MB)."}), 400
+        r = analyze_pcap(blob, f.filename or "capture.pcap")
+        if "error" in r:
+            return jsonify({"error": f"{f.filename}: {r['error']}"}), 400
+        results.append(r)
+        names.append(f.filename or "capture.pcap")
+
+    if len(results) == 1:
+        out = results[0]
+    else:
+        # merge: keep highest-scoring file's verdict, concat indicators
+        out = max(results, key=lambda r: r["attack_score"])
+        seen = set()
+        merged_ind = []
+        for r in results:
+            for ind in r["indicators"]:
+                k = (ind["type"], ind["detail"])
+                if k not in seen:
+                    seen.add(k); merged_ind.append(ind)
+        out["indicators"] = merged_ind
+    out["merged_files"] = names
+    out["file_count"] = len(names)
+    return jsonify(out)
+
+
+if __name__ == "__main__":  # entrypoint
     app.run(debug=True, host="0.0.0.0", port=5000)
