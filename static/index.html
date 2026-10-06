@@ -187,6 +187,9 @@ tr:hover td{background:var(--bg3);}
 /* Bulk action bar */
 .bulk-bar{display:none;align-items:center;gap:10px;padding:10px 20px;background:rgba(88,166,255,.08);border-bottom:1px solid rgba(88,166,255,.2);}
 .bulk-bar.visible{display:flex;}
+.tv-export-menu{position:absolute;left:0;bottom:calc(100% + 4px);z-index:50;min-width:240px;background:var(--card);border:1px solid var(--border);border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,.4);padding:4px;}
+.tv-export-menu button{display:block;width:100%;text-align:left;background:none;border:none;color:var(--text);font-size:12px;padding:7px 10px;border-radius:4px;cursor:pointer;}
+.tv-export-menu button:hover{background:var(--bg3);}
 .bulk-bar select{background:var(--bg3);border:1px solid var(--cyan);color:var(--text);border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;}
 .bulk-bar select:focus{outline:none;}
 
@@ -1537,11 +1540,23 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
             <option value="__AUTO__">Reset to Auto</option>
           </select>
           <button class="btn btn-sm" style="font-size:11px;padding:3px 10px;" onclick="applyBulkTrafficVerdict()">Apply to Selected</button>
+          <span style="width:1px;height:18px;background:var(--border);display:inline-block;margin:0 4px;"></span>
+          <button class="btn btn-secondary btn-sm" style="font-size:11px;padding:3px 10px;" onclick="exportTrafficInvCSV('selected')">&#11015; Export Selected CSV</button>
         </div>
 
         <div id="tv-inv-results"></div>
         <div id="tv-inv-view-btn" style="margin-top:12px;display:none;">
-          <button class="btn btn-sm" onclick="showPage('results-page',document.querySelector('[onclick*=results-page]'))">View Full Results Page</button>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <button class="btn btn-sm" onclick="showPage('results-page',document.querySelector('[onclick*=results-page]'))">View Full Results Page</button>
+            <div style="position:relative;display:inline-block;">
+              <button class="btn btn-secondary btn-sm" onclick="toggleTrafficInvExportMenu(event)">&#11015; Export CSV &#9662;</button>
+              <div id="tv-inv-export-menu" class="tv-export-menu" style="display:none;">
+                <button onclick="exportTrafficInvCSV('all')">All investigated IPs</button>
+                <button onclick="exportTrafficInvCSV('view')">Current view (filters applied)</button>
+                <button onclick="exportTrafficInvCSV('selected')">Selected IPs only <span id="tv-inv-export-selcount" style="color:var(--text2);"></span></button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -3590,7 +3605,6 @@ function clearTrafficInvSelection() {
 
 function renderTrafficInvResults(results) {
   if (!results || !results.length) { document.getElementById('tv-inv-results').textContent = 'No results.'; return; }
-  var _vOrd = {MALICIOUS:4,'HIGH RISK':3,SUSPICIOUS:2,CLEAN:1};
   var scoreEl = document.getElementById('tv-score');
   var subEl   = document.getElementById('tv-sub');
   trafficInvAllResults = results;
@@ -3623,20 +3637,7 @@ function renderTrafficInvResults(results) {
 
   document.getElementById('tv-inv-filter-panel').style.display = 'block';
 
-  var sorted = results.slice().sort(function(a,b){
-    var va=trafficInvManualVerdicts[a.ip]||a.verdict, vb=trafficInvManualVerdicts[b.ip]||b.verdict;
-    var oa=_vOrd[va]||0, ob=_vOrd[vb]||0;
-    if (ob!==oa) return ob-oa;
-    return (b.score||0)-(a.score||0);
-  });
-  var filtered = sorted.filter(function(r){
-    var effV=trafficInvManualVerdicts[r.ip]||r.verdict;
-    if (trafficInvVerdictFilter!=='ALL' && effV!==trafficInvVerdictFilter) return false;
-    if (r.score<trafficInvScoreMin||r.score>trafficInvScoreMax) return false;
-    if (trafficInvSearchQuery && r.ip.toLowerCase().indexOf(trafficInvSearchQuery)<0) return false;
-    if (trafficInvTop10Filter && !trafficInvTop10Set[r.ip]) return false;
-    return true;
-  });
+  var filtered = trafficInvFilterSort(results, true);
 
   var verdictOpts = ['MALICIOUS','HIGH RISK','SUSPICIOUS','CLEAN'];
   var srcDefs = [
@@ -3687,42 +3688,21 @@ function renderTrafficInvResults(results) {
       var isTop10 = !!trafficInvTop10Set[r.ip];
 
       // ── Traffic Behavior column ──────────────────────────────────
-      var beh = srcs.find(function(x){ return x.source==='Traffic Behavior'; });
+      var bh = trafficInvBehavior(r);
       var behHtml;
-      var shareLine = beh && (beh.ioc||[]).find(function(l){ return l.indexOf('Traffic share')===0; });
-      if (beh && shareLine) {
-        var shareMatch = shareLine.match(/([\d.]+)%/);
-        var sharePct   = shareMatch ? parseFloat(shareMatch[1]) : 0;
-        // Continuous green→yellow→orange→red gradient: 0% = green, >=30% = full red
-        var shc = 'hsl(' + Math.round(120 - Math.min(sharePct/30,1)*120) + ',75%,55%)';
-        var rest = (beh.ioc||[]).filter(function(l){ return l!==shareLine; }).map(function(l){
-          return '<div style="color:var(--text2);font-size:10px;margin-top:2px;">'+esc(l)+'</div>';
-        }).join('');
+      if (bh) {
+        var shc = 'hsl(' + Math.round(120 - Math.min(bh.bytesPct/30,1)*120) + ',75%,55%)';
         behHtml = '<div style="display:flex;gap:8px;align-items:center;">'
-          +'<b style="color:'+shc+';font-size:15px;">'+sharePct+'%</b>'
-          +'<span style="color:var(--text2);font-size:10px;">of total traffic</span>'
-          +'</div>'
+          +'<b style="color:'+shc+';font-size:15px;">'+bh.bytesPct.toFixed(2)+'%</b>'
+          +'<span style="color:var(--text2);font-size:10px;">of event traffic'+(bh.rank?' · #'+bh.rank+' by bytes':'')+'</span></div>'
           +'<div style="height:4px;background:var(--border);border-radius:2px;margin:4px 0;max-width:140px;">'
-          +'<div style="height:100%;width:'+Math.min(sharePct,100)+'%;background:'+shc+';border-radius:2px;"></div></div>'
-          +rest;
+          +'<div style="height:100%;width:'+Math.min(bh.bytesPct,100)+'%;background:'+shc+';border-radius:2px;"></div></div>'
+          +(bh.pktPct!==null?'<div style="color:var(--text2);font-size:10px;"><b style="color:var(--text);">'+bh.pktPct.toFixed(2)+'%</b> of event packets</div>':'')
+          +((bh.bytesFmt||bh.pktsFmt||bh.cdn)?'<div style="color:var(--text2);font-size:10px;margin-top:2px;">'+esc(bh.bytesFmt)+(bh.pktsFmt?' | '+esc(bh.pktsFmt)+' pkts':'')
+          +(bh.cdn?' | '+esc(bh.cdn):'')+'</div>':'')
+          +bh.extra.map(function(l){ return '<div style="color:var(--text2);font-size:10px;margin-top:2px;">'+esc(l)+'</div>'; }).join('');
       } else {
-        var volInfo = ((trafficAnalysisData&&(trafficAnalysisData.all_sources_bytes||trafficAnalysisData.top10_bytes))||[])
-          .find(function(x){ return x.ip===r.ip; });
-        if (volInfo) {
-          // BW involvement: this IP's share of total event bytes
-          var totB = trafficAnalysisData && trafficAnalysisData.summary && trafficAnalysisData.summary.total_bytes;
-          var invPct = totB ? Math.round(volInfo.bytes/totB*10000)/100 : 0;
-          var invC = 'hsl(' + Math.round(120 - Math.min(invPct/30,1)*120) + ',75%,55%)';
-          behHtml = '<div style="display:flex;gap:8px;align-items:center;">'
-            +'<b style="color:'+invC+';font-size:15px;">'+invPct+'%</b>'
-            +'<span style="color:var(--text2);font-size:10px;">of event traffic</span></div>'
-            +'<div style="height:4px;background:var(--border);border-radius:2px;margin:4px 0;max-width:140px;">'
-            +'<div style="height:100%;width:'+Math.min(invPct,100)+'%;background:'+invC+';border-radius:2px;"></div></div>'
-            +'<div style="color:var(--text2);font-size:10px;">'+esc(volInfo.bytes_fmt||'')+' | '+esc(volInfo.packets_fmt||'')+' pkts'
-            +(volInfo.cdn?' | '+esc(volInfo.cdn):'')+'</div>';
-        } else {
-          behHtml = '<span style="color:var(--text2);font-size:10px;">--</span>';
-        }
+        behHtml = '<span style="color:var(--text2);font-size:10px;">--</span>';
       }
 
       html+='<tr>'
@@ -3751,6 +3731,102 @@ function renderTrafficInvResults(results) {
   if (vb) vb.style.display = 'block';
   updateTrafficInvBulkBar();
   recalcTrafficScore();
+}
+
+// Sorted by (effective verdict, score); optionally filtered by the panel controls.
+function trafficInvFilterSort(results, applyFilters) {
+  var _vOrd = {MALICIOUS:4,'HIGH RISK':3,SUSPICIOUS:2,CLEAN:1};
+  var sorted = (results||[]).slice().sort(function(a,b){
+    var va=trafficInvManualVerdicts[a.ip]||a.verdict, vb=trafficInvManualVerdicts[b.ip]||b.verdict;
+    var oa=_vOrd[va]||0, ob=_vOrd[vb]||0;
+    if (ob!==oa) return ob-oa;
+    return (b.score||0)-(a.score||0);
+  });
+  if (!applyFilters) return sorted;
+  return sorted.filter(function(r){
+    var effV=trafficInvManualVerdicts[r.ip]||r.verdict;
+    if (trafficInvVerdictFilter!=='ALL' && effV!==trafficInvVerdictFilter) return false;
+    if (r.score<trafficInvScoreMin||r.score>trafficInvScoreMax) return false;
+    if (trafficInvSearchQuery && r.ip.toLowerCase().indexOf(trafficInvSearchQuery)<0) return false;
+    if (trafficInvTop10Filter && !trafficInvTop10Set[r.ip]) return false;
+    return true;
+  });
+}
+
+// An IP's share of the analyzed event: bytes %, packets %, rank by bytes.
+// Prefers the loaded Traffic Analysis data; falls back to the server-side
+// "Traffic Behavior" source lines. Returns null if the IP isn't in the capture.
+function trafficInvBehavior(r) {
+  var td   = trafficAnalysisData || {};
+  var list = td.all_sources_bytes || td.top10_bytes || [];
+  var idx  = list.findIndex(function(x){ return x.ip===r.ip; });
+  var vol  = idx>=0 ? list[idx] : null;
+  var sum  = td.summary || {};
+  var beh  = (Array.isArray(r.sources)?r.sources:[]).find(function(x){ return x.source==='Traffic Behavior'; });
+  var lines = (beh && beh.ioc) || [];
+  var shareLine = lines.find(function(l){ return l.indexOf('Traffic share')===0; });
+  if (!vol && !shareLine) return null;
+  var out = {bytesPct:0, pktPct:null, rank:null, bytes:'', packets:'', bytesFmt:'', pktsFmt:'', cdn:'', extra:[]};
+  if (vol) {
+    out.bytesPct = sum.total_bytes ? vol.bytes/sum.total_bytes*100 : 0;
+    out.pktPct   = sum.total_packets ? vol.packets/sum.total_packets*100 : null;
+    out.rank     = td.all_sources_bytes ? idx+1 : null;
+    out.bytes = vol.bytes; out.packets = vol.packets;
+    out.bytesFmt = vol.bytes_fmt||''; out.pktsFmt = vol.packets_fmt||''; out.cdn = vol.cdn||'';
+  } else {
+    var m = shareLine.match(/([\d.]+)%/);
+    out.bytesPct = m ? parseFloat(m[1]) : 0;
+    out.extra = lines.filter(function(l){ return l!==shareLine; });
+  }
+  return out;
+}
+
+function toggleTrafficInvExportMenu(ev) {
+  if (ev) ev.stopPropagation();
+  var m = document.getElementById('tv-inv-export-menu');
+  var open = m.style.display !== 'block';
+  m.style.display = open ? 'block' : 'none';
+  document.getElementById('tv-inv-export-selcount').textContent = '(' + Object.keys(trafficInvSelected).length + ')';
+  if (open) setTimeout(function(){
+    document.addEventListener('click', function close(){ m.style.display='none'; document.removeEventListener('click', close); });
+  }, 0);
+}
+
+// mode: 'all' | 'view' (current filters) | 'selected' (checked rows)
+function exportTrafficInvCSV(mode) {
+  var menu = document.getElementById('tv-inv-export-menu');
+  if (menu) menu.style.display = 'none';
+  var recs = trafficInvFilterSort(trafficInvAllResults, mode === 'view');
+  if (mode === 'selected') recs = recs.filter(function(r){ return trafficInvSelected[r.ip]; });
+  if (!recs.length) { alert(mode==='selected' ? 'No IPs selected.' : 'No results to export.'); return; }
+
+  var srcNames = [];
+  recs.forEach(function(r){ (r.sources||[]).forEach(function(s){
+    if (s.source!=='Traffic Behavior' && srcNames.indexOf(s.source)<0) srcNames.push(s.source); }); });
+  var head = ['#','Source IP','Top 10','Traffic Rank (bytes)','Traffic Share % (bytes)','Packet Share %',
+              'Bytes','Bytes (fmt)','Packets','Packets (fmt)','CDN / Org',
+              'Verdict','System Verdict','Manual Override','Score','Timestamp'];
+  srcNames.forEach(function(n){ head.push(n+' Score', n+' Findings', n+' URL'); });
+  var rows = [head];
+  recs.forEach(function(r, i) {
+    var man = trafficInvManualVerdicts[r.ip];
+    var bh  = trafficInvBehavior(r) || {};
+    var row = [i+1, r.ip, trafficInvTop10Set[r.ip] ? 'YES' : 'NO', bh.rank || '',
+      bh.bytesPct!==undefined ? bh.bytesPct.toFixed(2) : '',
+      (bh.pktPct!==undefined && bh.pktPct!==null) ? bh.pktPct.toFixed(2) : '',
+      bh.bytes, bh.bytesFmt, bh.packets, bh.pktsFmt, bh.cdn,
+      man || r.verdict, r.verdict, man ? 'YES' : 'NO', r.score, r.timestamp || ''];
+    var byName = {}; (r.sources||[]).forEach(function(s){ byName[s.source] = s; });
+    srcNames.forEach(function(n) {
+      var s = byName[n];
+      if (!s) { row.push('', '', ''); return; }
+      var findings = (s.error ? ['ERROR: ' + s.error] : []).concat(s.ioc || []).join(' | ');
+      row.push(s.score, findings, s.url || '');
+    });
+    rows.push(row);
+  });
+  var csv = '\uFEFF' + rows.map(function(r){ return r.map(csvCell).join(','); }).join('\r\n');
+  download(new Blob([csv],{type:'text/csv;charset=utf-8'}), 'traffic_investigation_'+mode+'_'+ts()+'.csv');
 }
 
 function applyBulkTrafficVerdict() {
