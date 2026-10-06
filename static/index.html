@@ -190,6 +190,8 @@ tr:hover td{background:var(--bg3);}
 .tv-export-menu{position:absolute;left:0;bottom:calc(100% + 4px);z-index:50;min-width:240px;background:var(--card);border:1px solid var(--border);border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,.4);padding:4px;}
 .tv-export-menu button{display:block;width:100%;text-align:left;background:none;border:none;color:var(--text);font-size:12px;padding:7px 10px;border-radius:4px;cursor:pointer;}
 .tv-export-menu button:hover{background:var(--bg3);}
+.tv-export-hdr{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--text2);padding:8px 10px 4px;}
+.tv-export-hdr:not(:first-child){border-top:1px solid var(--border);margin-top:4px;}
 .bulk-bar select{background:var(--bg3);border:1px solid var(--cyan);color:var(--text);border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;}
 .bulk-bar select:focus{outline:none;}
 
@@ -1541,7 +1543,8 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
           </select>
           <button class="btn btn-sm" style="font-size:11px;padding:3px 10px;" onclick="applyBulkTrafficVerdict()">Apply to Selected</button>
           <span style="width:1px;height:18px;background:var(--border);display:inline-block;margin:0 4px;"></span>
-          <button class="btn btn-secondary btn-sm" style="font-size:11px;padding:3px 10px;" onclick="exportTrafficInvCSV('selected')">&#11015; Export Selected CSV</button>
+          <button class="btn btn-secondary btn-sm" style="font-size:11px;padding:3px 10px;" onclick="exportTrafficInvCSV('selected',true)">&#11015; Export Selected (Simple)</button>
+          <button class="btn btn-secondary btn-sm" style="font-size:11px;padding:3px 10px;" onclick="exportTrafficInvCSV('selected')">&#11015; Export Selected (Detailed)</button>
         </div>
 
         <div id="tv-inv-results"></div>
@@ -1551,9 +1554,14 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
             <div style="position:relative;display:inline-block;">
               <button class="btn btn-secondary btn-sm" onclick="toggleTrafficInvExportMenu(event)">&#11015; Export CSV &#9662;</button>
               <div id="tv-inv-export-menu" class="tv-export-menu" style="display:none;">
+                <div class="tv-export-hdr">Simplified (scores only)</div>
+                <button onclick="exportTrafficInvCSV('all',true)">All investigated IPs</button>
+                <button onclick="exportTrafficInvCSV('view',true)">Current view (filters applied)</button>
+                <button onclick="exportTrafficInvCSV('selected',true)">Selected IPs only <span class="tv-inv-export-selcount" style="color:var(--text2);"></span></button>
+                <div class="tv-export-hdr">Detailed (findings + URLs)</div>
                 <button onclick="exportTrafficInvCSV('all')">All investigated IPs</button>
                 <button onclick="exportTrafficInvCSV('view')">Current view (filters applied)</button>
-                <button onclick="exportTrafficInvCSV('selected')">Selected IPs only <span id="tv-inv-export-selcount" style="color:var(--text2);"></span></button>
+                <button onclick="exportTrafficInvCSV('selected')">Selected IPs only <span class="tv-inv-export-selcount" style="color:var(--text2);"></span></button>
               </div>
             </div>
           </div>
@@ -3786,19 +3794,40 @@ function toggleTrafficInvExportMenu(ev) {
   var m = document.getElementById('tv-inv-export-menu');
   var open = m.style.display !== 'block';
   m.style.display = open ? 'block' : 'none';
-  document.getElementById('tv-inv-export-selcount').textContent = '(' + Object.keys(trafficInvSelected).length + ')';
+  var selTxt = '(' + Object.keys(trafficInvSelected).length + ')';
+  document.querySelectorAll('.tv-inv-export-selcount').forEach(function(el){ el.textContent = selTxt; });
   if (open) setTimeout(function(){
     document.addEventListener('click', function close(){ m.style.display='none'; document.removeEventListener('click', close); });
   }, 0);
 }
 
 // mode: 'all' | 'view' (current filters) | 'selected' (checked rows)
-function exportTrafficInvCSV(mode) {
+// simple: compact sheet — traffic share + verdict + per-source scores only
+function exportTrafficInvCSV(mode, simple) {
   var menu = document.getElementById('tv-inv-export-menu');
   if (menu) menu.style.display = 'none';
   var recs = trafficInvFilterSort(trafficInvAllResults, mode === 'view');
   if (mode === 'selected') recs = recs.filter(function(r){ return trafficInvSelected[r.ip]; });
   if (!recs.length) { alert(mode==='selected' ? 'No IPs selected.' : 'No results to export.'); return; }
+
+  if (simple) {
+    var SRC = ['AbuseIPDB','VirusTotal','AlienVault OTX','ip-api'];
+    var srows = [['Source IP','Top 10','Traffic Share % (bytes)','Packet Share %','Bytes (fmt)','Packets (fmt)',
+                  'Verdict','Score'].concat(SRC.map(function(n){ return n+' Score'; }))];
+    recs.forEach(function(r) {
+      var bh = trafficInvBehavior(r) || {};
+      var byName = {}; (r.sources||[]).forEach(function(s){ byName[s.source] = s; });
+      srows.push([r.ip, trafficInvTop10Set[r.ip] ? 'YES' : 'NO',
+        bh.bytesPct!==undefined ? bh.bytesPct.toFixed(2) : '',
+        (bh.pktPct!==undefined && bh.pktPct!==null) ? bh.pktPct.toFixed(2) : '',
+        bh.bytesFmt || '', bh.pktsFmt || '',
+        trafficInvManualVerdicts[r.ip] || r.verdict, r.score]
+        .concat(SRC.map(function(n){ return byName[n] ? (byName[n].score || 0) : ''; })));
+    });
+    var scsv = '﻿' + srows.map(function(r){ return r.map(csvCell).join(','); }).join('\r\n');
+    download(new Blob([scsv],{type:'text/csv;charset=utf-8'}), 'traffic_investigation_simple_'+mode+'_'+ts()+'.csv');
+    return;
+  }
 
   var srcNames = [];
   recs.forEach(function(r){ (r.sources||[]).forEach(function(s){
