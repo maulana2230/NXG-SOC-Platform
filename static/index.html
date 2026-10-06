@@ -274,7 +274,7 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
 
     <!-- Unified input -->
     <div class="input-row">
-      <textarea id="unified-input" style="min-height:140px;"
+      <textarea id="unified-input" style="min-height:140px;" oninput="updateInputPreview()"
         placeholder="Paste IPs, CIDR prefixes and/or hashes here — mix freely, one per line&#10;&#10;IP examples:   185.220.101.1  /  8.8.8.8&#10;CIDR example:  202.130.52.0/24  (scans every host in the prefix)&#10;Hash examples: d41d8cd98f00b204e9800998ecf8427e  (MD5)&#10;               e3b0c44298fc1c149afbf4c8996fb924...  (SHA256)"></textarea>
     </div>
 
@@ -1154,7 +1154,9 @@ tr.selected td{background:rgba(88,166,255,.06)!important;}
         </div>
       </div>
       <div class="export-row" style="padding:8px 20px 16px;">
+        <button class="btn btn-primary btn-sm" id="hash-pdf-btn" onclick="exportHashPDF()">📄 Export PDF</button>
         <button class="btn btn-secondary btn-sm" onclick="exportHashJSON()">⬇ JSON</button>
+        <button class="btn btn-secondary btn-sm" onclick="exportHashCSV()">⬇ CSV</button>
         <button class="btn btn-secondary btn-sm" onclick="clearHashResults()">🗑 Clear</button>
       </div>
       <div style="overflow-x:auto;">
@@ -1716,7 +1718,9 @@ function setPreset(name, btn) {
 function parseUnifiedInput() {
   // Read from unified textarea OR uploaded file lines
   var raw_text = document.getElementById('unified-input').value;
-  var lines    = raw_text.split(/[\n,]+/).map(function(s){ return s.trim(); }).filter(Boolean);
+  var lines    = raw_text.split(/[\n,]+/)
+    .map(function(s){ return s.trim().replace(/\s*\/\s*(\d{1,2})$/, '/$1'); })  // tolerate "10.0.0.0 / 24"
+    .filter(Boolean);
   // Also include any uploaded IPs
   if (uploadedIPs.length && !raw_text.trim()) lines = uploadedIPs;
   var ips    = [];
@@ -1748,12 +1752,25 @@ function isValidIP(s) {
 function updateInputPreview() {
   var p = parseUnifiedInput();
   var el = document.getElementById('input-preview');
-  if (!p.ips.length && !p.hashes.length) { el.style.display = 'none'; return; }
+  if (!p.ips.length && !p.hashes.length && !p.invalid.length) { el.style.display = 'none'; return; }
   el.style.display = 'flex';
+
+  // Explain the first unrecognized entry so a bare "/24" or a typo tells the user why.
+  var hint = '';
+  if (p.invalid.length) {
+    var first = p.invalid[0];
+    if (/^\/\d{1,2}$/.test(first))
+      hint = ' — a CIDR needs a base network, e.g. 202.130.52.0' + first;
+    else if (/\/\d{1,3}$/.test(first))
+      hint = ' — "' + first + '": check the address (each octet 0–255, prefix 0–32)';
+    else
+      hint = ' — "' + first + '"';
+  }
+
   el.innerHTML =
-    (p.ips.length    ? '<span style="color:var(--cyan);">&#128205; ' + p.ips.length + ' IP' + (p.ips.length>1?'s':'') + '</span>' : '') +
+    (p.ips.length    ? '<span style="color:var(--cyan);">&#128205; ' + p.ips.length + ' IP' + (p.ips.length>1?'s':'') + ' / CIDR</span>' : '') +
     (p.hashes.length ? '<span style="color:var(--purple);">&#128273; ' + p.hashes.length + ' Hash' + (p.hashes.length>1?'es':'') + '</span>' : '') +
-    (p.invalid.length? '<span style="color:var(--text2);">&#10005; ' + p.invalid.length + ' unrecognized</span>' : '');
+    (p.invalid.length? '<span style="color:var(--text2);">&#10005; ' + p.invalid.length + ' unrecognized' + hint + '</span>' : '');
 }
 
 function runInvestigation() {
@@ -1790,11 +1807,11 @@ function runInvestigation() {
 
   function onAllDone() {
     if (ipSessionResults.length) {
-      allResults = allResults.concat(ipSessionResults);
+      allResults = mergeResults(allResults, ipSessionResults, 'ip');
       updateResultsCount();
     }
     if (hashSessionResults.length) {
-      hashResults = hashResults.concat(hashSessionResults);
+      hashResults = mergeResults(hashResults, hashSessionResults, 'hash');
       updateHashCount();
       renderHashResults();
     }
@@ -1823,7 +1840,7 @@ function runInvestigation() {
     document.getElementById('progress-fill').style.width = pct + '%';
     document.getElementById('progress-count').textContent = doneItems + ' / ' + totalItems;
     document.getElementById('progress-pct').textContent   = '(' + pct + '%)';
-    document.getElementById('progress-ip').textContent    = '&#10003; ' + label;
+    document.getElementById('progress-ip').textContent    = '\u2713 ' + label;
   }
 
   function streamSSE(url, body, onResult, label) {
@@ -1832,7 +1849,12 @@ function runInvestigation() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     }).then(function(res) {
-      if (!res.ok) return res.json().then(function(e){ setStatus(e.error||'Failed','error'); });
+      if (!res.ok) {
+        return res.json().catch(function(){ return {}; }).then(function(e){
+          setStatus((label||'') + ' error: ' + (e.error||('HTTP '+res.status)), 'error');
+          pendingStreams--; if (!pendingStreams) onAllDone();
+        });
+      }
       var reader=res.body.getReader(), decoder=new TextDecoder(), buf='';
       function read() {
         return reader.read().then(function(chunk) {
@@ -1872,6 +1894,18 @@ function runInvestigation() {
       function(r){ hashSessionResults.push(r); },
       'Hash');
   }
+}
+
+// Replace an existing row for the same indicator instead of appending a
+// duplicate (manual verdicts and checkboxes are keyed by indicator).
+function mergeResults(existing, fresh, key) {
+  var idx = {};
+  existing.forEach(function(r, i){ idx[r[key]] = i; });
+  fresh.forEach(function(r) {
+    if (idx.hasOwnProperty(r[key])) existing[idx[r[key]]] = r;
+    else { idx[r[key]] = existing.length; existing.push(r); }
+  });
+  return existing;
 }
 
 function buildSummary(results) {
@@ -2192,12 +2226,8 @@ function exportPDF() {
   }
   if (!toExport.length) { alert('No results to export.'); return; }
 
-  // Apply manual verdict overrides before sending to PDF
-  var payload = toExport.map(function(r) {
-    var copy = Object.assign({}, r);
-    if (manualVerdicts[r.ip]) copy.verdict = manualVerdicts[r.ip];
-    return copy;
-  });
+  // Apply manual verdict overrides + per-source verification URLs
+  var payload = toExport.map(function(r){ return exportRecord(r, 'ip', manualVerdicts); });
 
   var btn = document.getElementById('pdf-btn');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Generating...'; }
@@ -2226,16 +2256,106 @@ function updatePDFBtn() {
   btn.textContent = n > 0 ? '📄 Export Selected (' + n + ')' : '📄 Export PDF';
 }
 
+// ── Export helpers ────────────────────────────────────────────────
+// Public lookup URLs per threat feed — fallback for results that were
+// produced before the API embedded a per-source url.
+var SOURCE_URL_TPL = {
+  ip: {
+    'AbuseIPDB':       'https://www.abuseipdb.com/check/{x}',
+    'VirusTotal':      'https://www.virustotal.com/gui/ip-address/{x}',
+    'AlienVault OTX':  'https://otx.alienvault.com/indicator/ip/{x}',
+    'Hybrid Analysis': 'https://www.hybrid-analysis.com/search?query={x}&dataType=ip',
+    'GreyNoise':       'https://viz.greynoise.io/ip/{x}',
+    'ThreatFox':       'https://threatfox.abuse.ch/browse.php?search=ioc%3A{x}',
+    'ip-api':          'https://ip-api.com/#{x}'
+  },
+  hash: {
+    'VirusTotal':      'https://www.virustotal.com/gui/file/{x}',
+    'MalwareBazaar':   'https://bazaar.abuse.ch/browse.php?search={x}',
+    'AlienVault OTX':  'https://otx.alienvault.com/indicator/file/{x}',
+    'Hybrid Analysis': 'https://www.hybrid-analysis.com/sample/{x}'
+  }
+};
+function sourceUrl(s, indicator, kind) {
+  if (s.url) return s.url;
+  var tpl = (SOURCE_URL_TPL[kind] || {})[s.source];
+  return tpl ? tpl.replace('{x}', encodeURIComponent(indicator)) : '';
+}
+// Build an export-ready copy: effective verdict (manual override applied),
+// system verdict kept, and a url on every source + flat verification list.
+function exportRecord(r, kind, overrides) {
+  var id  = kind === 'hash' ? r.hash : r.ip;
+  var ov  = overrides ? overrides[id] : null;
+  var out = JSON.parse(JSON.stringify(r));
+  out.system_verdict  = r.verdict;
+  out.verdict         = ov || r.verdict;
+  out.manual_override = !!ov;
+  out.sources = (r.sources || []).map(function(s) {
+    var c = Object.assign({}, s); c.url = sourceUrl(s, id, kind); return c;
+  });
+  out.verification_links = out.sources.filter(function(s){ return s.url; })
+    .map(function(s){ return { source: s.source, url: s.url }; });
+  return out;
+}
+// Selected rows (checkboxes) or all rows.
+function ipExportSet() {
+  var checked = Array.from(document.querySelectorAll('.ip-select-cb:checked'));
+  if (!checked.length) return allResults;
+  var sel = {}; checked.forEach(function(cb){ sel[cb.dataset.ip] = true; });
+  return allResults.filter(function(r){ return sel[r.ip]; });
+}
+function csvCell(v) {
+  if (v === null || v === undefined) v = '';
+  v = String(v);
+  return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+}
+// One row per indicator; per-source Score / Findings / URL columns so the
+// reader can jump to the feed and verify each finding.
+function buildCsv(records, kind) {
+  var idLabel = kind === 'hash' ? 'Hash' : 'IP';
+  var srcNames = [];
+  records.forEach(function(r){ (r.sources||[]).forEach(function(s){
+    if (srcNames.indexOf(s.source) < 0) srcNames.push(s.source); }); });
+  var head = [idLabel];
+  if (kind === 'hash') head.push('Hash Type','File Name','File Type');
+  head = head.concat(['Score','Verdict','System Verdict','Manual Override','Timestamp']);
+  srcNames.forEach(function(n){ head.push(n+' Score', n+' Findings', n+' URL'); });
+  head.push('All Verification URLs');
+  var rows = [head];
+  records.forEach(function(r) {
+    var byName = {}; (r.sources||[]).forEach(function(s){ byName[s.source] = s; });
+    var row = [kind === 'hash' ? r.hash : r.ip];
+    if (kind === 'hash') { var fi = r.file_info||{}; row.push(r.hash_type||'', fi.name||'', fi.type||''); }
+    row = row.concat([r.score, r.verdict, r.system_verdict, r.manual_override ? 'YES' : 'NO', r.timestamp]);
+    srcNames.forEach(function(n) {
+      var s = byName[n];
+      if (!s) { row.push('', '', ''); return; }
+      var findings = (s.error ? ['ERROR: ' + s.error] : []).concat(s.ioc || []).join(' | ');
+      row.push(s.score, findings, s.url || '');
+    });
+    row.push((r.verification_links||[]).map(function(l){ return l.url; }).join(' '));
+    rows.push(row);
+  });
+  return '\uFEFF' + rows.map(function(r){ return r.map(csvCell).join(','); }).join('\r\n');
+}
+
 function exportJSON() {
-  download(new Blob([JSON.stringify(allResults,null,2)],{type:'application/json'}), 'ip_report_'+ts()+'.json');
+  var recs = ipExportSet().map(function(r){ return exportRecord(r, 'ip', manualVerdicts); });
+  if (!recs.length) { alert('No results to export.'); return; }
+  var doc = { report: 'IP Reputation Investigation', generated: new Date().toISOString(),
+              total: recs.length, note: 'Each source carries its public lookup url for verification.',
+              results: recs };
+  download(new Blob([JSON.stringify(doc,null,2)],{type:'application/json'}), 'ip_report_'+ts()+'.json');
 }
 function exportCSV() {
-  var rows = [['IP','Score','Verdict','Timestamp']];
-  allResults.forEach(function(r){ rows.push([r.ip, r.score, r.verdict, r.timestamp]); });
-  var csv = rows.map(function(r){ return r.map(function(v){ return '"'+v+'"'; }).join(','); }).join('\n');
-  download(new Blob([csv],{type:'text/csv'}), 'ip_report_'+ts()+'.csv');
+  var recs = ipExportSet().map(function(r){ return exportRecord(r, 'ip', manualVerdicts); });
+  if (!recs.length) { alert('No results to export.'); return; }
+  download(new Blob([buildCsv(recs, 'ip')],{type:'text/csv;charset=utf-8'}), 'ip_report_'+ts()+'.csv');
 }
-function download(blob, name) { var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click(); }
+function download(blob, name) {
+  var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 5000);
+}
 function ts() { return new Date().toISOString().replace(/[:.]/g,'-').slice(0,19); }
 
 // ── Settings ──────────────────────────────────────────────────────
@@ -2670,8 +2790,35 @@ function updateHashCount() {
   if (hashResults.length) { el.style.display='inline'; el.textContent=hashResults.length; }
 }
 
+function hashExportSet() {
+  return hashFilter === 'ALL' ? hashResults : hashResults.filter(function(r){ return r.verdict === hashFilter; });
+}
 function exportHashJSON() {
-  download(new Blob([JSON.stringify(hashResults,null,2)],{type:'application/json'}), 'hash_report_'+ts()+'.json');
+  var recs = hashExportSet().map(function(r){ return exportRecord(r, 'hash', null); });
+  if (!recs.length) { alert('No hash results to export.'); return; }
+  var doc = { report: 'File Hash Investigation', generated: new Date().toISOString(),
+              total: recs.length, note: 'Each source carries its public lookup url for verification.',
+              results: recs };
+  download(new Blob([JSON.stringify(doc,null,2)],{type:'application/json'}), 'hash_report_'+ts()+'.json');
+}
+function exportHashCSV() {
+  var recs = hashExportSet().map(function(r){ return exportRecord(r, 'hash', null); });
+  if (!recs.length) { alert('No hash results to export.'); return; }
+  download(new Blob([buildCsv(recs, 'hash')],{type:'text/csv;charset=utf-8'}), 'hash_report_'+ts()+'.csv');
+}
+function exportHashPDF() {
+  var recs = hashExportSet().map(function(r){ return exportRecord(r, 'hash', null); });
+  if (!recs.length) { alert('No hash results to export.'); return; }
+  var btn = document.getElementById('hash-pdf-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Generating...'; }
+  fetch('/api/export/hash/pdf', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ results: recs })
+  }).then(function(res) {
+    if (!res.ok) return res.json().then(function(e){ alert('PDF error: ' + e.error); });
+    return res.blob().then(function(blob){ download(blob, 'hash_report_' + ts() + '.pdf'); });
+  }).catch(function(e){ alert('Error: ' + e.message); })
+  .finally(function(){ if (btn) { btn.disabled = false; btn.textContent = '📄 Export PDF'; } });
 }
 
 function clearHashResults() {
