@@ -15,12 +15,12 @@ A web-based Security Operations Center (SOC) platform for **IP reputation invest
 - Automatic scoring (0–100) with verdict: `MALICIOUS` / `HIGH RISK` / `SUSPICIOUS` / `CLEAN`
 - Manual verdict override per IP
 - Filter by verdict, score range, and search by IP
-- Export results to **PDF report**
+- Export results to **PDF, CSV, or JSON** — every source row carries the public lookup URL of the threat feed (AbuseIPDB, VirusTotal, OTX, GreyNoise, Hybrid Analysis, ThreatFox) so each finding can be verified at its origin; manual verdict overrides and row selection are honored in all three formats
 
 ### 🔎 Hash Analysis
 - Submit MD5 / SHA-1 / SHA-256 file hashes to **VirusTotal**, **Hybrid Analysis**, **AlienVault OTX**, and **ThreatFox**
 - Detection count across AV engines
-- Export results to **PDF report**
+- Export results to **PDF, CSV, or JSON** with per-source verification URLs (VirusTotal, MalwareBazaar, OTX, Hybrid Analysis)
 
 ### 📡 Traffic Analysis
 - Upload NetFlow/CSV exported from Anti-DDoS appliances (Nexusguard Platform)
@@ -110,6 +110,15 @@ pip install -r requirements.txt
 python app.py
 ```
 **Windows shortcut:** double-click `START.bat` (installs dependencies and starts the server for you).
+
+By default the dev server binds to **127.0.0.1:5000** with the Werkzeug debugger **off** (the interactive debugger is a remote-code-execution surface and this app has no authentication). Override with environment variables when you need to:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `NXG_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` to expose on the LAN — put TLS + auth in front) |
+| `NXG_PORT` | `5000` | Listen port |
+| `NXG_DEBUG` | `0` | `1` enables Flask debug/auto-reload for development only |
+| `NXG_CORS_ORIGINS` | *(empty)* | Comma-separated origins allowed to call the API cross-origin. Empty = same-origin only, which prevents other websites from reading `/api/config/reveal` |
 
 #### Option B — Run with Docker (recommended for servers/deployment)
 Requires [Docker](https://docs.docker.com/get-docker/) and the Docker Compose plugin.

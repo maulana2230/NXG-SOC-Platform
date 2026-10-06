@@ -155,19 +155,31 @@ def save_config(data):
 BACKUP_SUFFIX = "_BACKUPS"
 ROTATE_FIELDS = {"VIRUSTOTAL_KEY"}
 
+_PLACEHOLDER_RE = re.compile(r"^(your_|<|xxx|changeme|placeholder|none$|null$)", re.I)
+
+def _is_real_key(v):
+    """Reject empty values and the placeholders shipped in config.example.json
+    (e.g. YOUR_ABUSEIPDB_API_KEY) so they are not treated as configured keys."""
+    if not isinstance(v, str):
+        return False
+    v = v.strip()
+    if not v or _PLACEHOLDER_RE.match(v) or "your_key_here" in v.lower():
+        return False
+    return True
+
 def get_key_pool(cfg, field):
     """Return an ordered list of all non-empty API keys configured for a
     source field: primary key first, then backup keys, de-duplicated."""
     pool = []
     primary = cfg.get(field)
-    if isinstance(primary, str) and primary.strip():
+    if isinstance(primary, str) and _is_real_key(primary):
         pool.append(primary.strip())
     elif isinstance(primary, list):  # tolerate legacy/odd shapes
-        pool.extend(x.strip() for x in primary if isinstance(x, str) and x.strip())
+        pool.extend(x.strip() for x in primary if _is_real_key(x))
     backups = cfg.get(field + BACKUP_SUFFIX)
     if isinstance(backups, list):
         for b in backups:
-            if isinstance(b, str) and b.strip() and b.strip() not in pool:
+            if _is_real_key(b) and b.strip() not in pool:
                 pool.append(b.strip())
     return pool
 
@@ -886,9 +898,9 @@ def investigate_hash(h, cfg, active_sources=None):
         for k, fut in tasks.items():
             try:
                 res = fut.result()
-                results.append(res if res is not None else {"source": k, "score": 0, "ioc": [], "error": "No API key"})
+                results.append(res if res is not None else {"source": _TASK_NAMES.get(k, k), "score": 0, "ioc": [], "error": "No API key"})
             except Exception as e:
-                results.append({"source": k, "score": 0, "ioc": [], "error": str(e)})
+                results.append({"source": _TASK_NAMES.get(k, k), "score": 0, "ioc": [], "error": str(e)})
     score, v = calc_hash_verdict(results)
     # Aggregate file info from sources
     file_info = {}
@@ -984,6 +996,14 @@ SOURCE_URLS = {
 
 ALL_SOURCES = ["abuseipdb", "virustotal", "otx", "hybrid", "greynoise", "ipapi", "threatfox", "behavior"]
 
+# Task-key -> display name, used when a worker raises before returning a
+# result dict so the fallback entry still carries a proper name + URL.
+_TASK_NAMES = {
+    "abuse": "AbuseIPDB", "vt": "VirusTotal", "otx": "AlienVault OTX",
+    "ha": "Hybrid Analysis", "gn": "GreyNoise", "ipapi": "ip-api",
+    "threatfox": "ThreatFox", "behavior": "Traffic Behavior", "mb": "MalwareBazaar",
+}
+
 def investigate(ip, cfg, active_sources=None):
     """active_sources: list of source ids to query. None = all configured sources."""
     if active_sources is None:
@@ -1017,9 +1037,9 @@ def investigate(ip, cfg, active_sources=None):
         for k, fut in tasks.items():
             try:
                 res = fut.result()
-                results.append(res if res is not None else {"source": k, "score": 0, "ioc": [], "error": "No API key"})
+                results.append(res if res is not None else {"source": _TASK_NAMES.get(k, k), "score": 0, "ioc": [], "error": "No API key"})
             except Exception as e:
-                results.append({"source": k, "score": 0, "ioc": [], "error": str(e)})
+                results.append({"source": _TASK_NAMES.get(k, k), "score": 0, "ioc": [], "error": str(e)})
 
     # ── Whitelist dampening (cross-source) ─────────────────────────
     # If any source marks the IP as whitelisted shared infrastructure,
@@ -1048,7 +1068,20 @@ def investigate(ip, cfg, active_sources=None):
 
 # ── Flask App ─────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="")
-CORS(app)
+# The UI is served from this same origin, so cross-origin access is not
+# needed. A wildcard CORS policy would let any web page the analyst visits
+# call /api/config/reveal and exfiltrate the stored API keys. Opt-in only:
+#   NXG_CORS_ORIGINS="https://soc.example.com,https://other.example.com"
+_cors_origins = [o.strip() for o in os.environ.get("NXG_CORS_ORIGINS", "").split(",") if o.strip()]
+if _cors_origins:
+    CORS(app, origins=_cors_origins)
+
+@app.after_request
+def _security_headers(resp):
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    return resp
 
 @app.route("/")
 def index():
@@ -1283,7 +1316,35 @@ def api_investigate_stream():
         }
     )
 
-def build_pdf(results):
+from xml.sax.saxutils import escape as _xml_escape
+
+def _lookup_url(source, indicator, kind="ip"):
+    """Public lookup URL for a (source, indicator) pair — fallback for result
+    objects produced before the API started embedding per-source URLs."""
+    tbl = HASH_SOURCE_URLS if kind == "hash" else SOURCE_URLS
+    tpl = tbl.get(source, "")
+    if not tpl:
+        return ""
+    return tpl.format(ip=indicator, hash=indicator)
+
+def pdf_esc(text):
+    """Escape text for ReportLab Paragraph mini-markup. Raw '&', '<', '>' in
+    API data (e.g. ISP 'AT&T', tags like '<script>') otherwise make
+    Paragraph raise a parse error and the whole export fails."""
+    return _xml_escape(str(text if text is not None else ""))
+
+def pdf_link(url, label=None):
+    """Clickable hyperlink inside a Paragraph (also readable as plain text)."""
+    if not url:
+        return ""
+    return '<a href="{u}" color="#58a6ff"><u>{l}</u></a>'.format(
+        u=pdf_esc(url), l=pdf_esc(label or url))
+
+def build_pdf(results, kind="ip"):
+    """Threat-intel report. kind="ip" (IP reputation) or kind="hash" (file hash).
+    Every source row carries the public lookup URL so the reader can verify
+    each finding at the originating threat feed."""
+    id_field = "hash" if kind == "hash" else "ip"
     from io import BytesIO
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
@@ -1374,7 +1435,7 @@ def build_pdf(results):
     story = []
 
     story.append(Spacer(1, 8*mm))
-    story.append(Paragraph("IP REPUTATION INVESTIGATOR",
+    story.append(Paragraph("FILE HASH INVESTIGATOR" if kind == "hash" else "IP REPUTATION INVESTIGATOR",
                             ps("h1", fontName="Helvetica-Bold", fontSize=18,
                                textColor=COL_CYAN, alignment=TA_CENTER, leading=24)))
     story.append(Spacer(1, 3*mm))
@@ -1385,8 +1446,12 @@ def build_pdf(results):
     story.append(Spacer(1, 2*mm))
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     story.append(Paragraph(
-        "Generated: {}   |   Total IPs: {}".format(ts, len(results)),
+        "Generated: {}   |   Total {}: {}".format(ts, "hashes" if kind == "hash" else "IPs", len(results)),
         ps("meta", fontSize=7, textColor=COL_TEXT2, alignment=TA_CENTER)))
+    story.append(Spacer(1, 1*mm))
+    story.append(Paragraph(
+        "Each source row includes the public lookup URL of the threat feed so every finding can be verified at its origin.",
+        ps("meta2", fontSize=6.5, textColor=COL_TEXT2, alignment=TA_CENTER)))
     story.append(Spacer(1, 5*mm))
 
     # Sort: highest risk first, then by score descending
@@ -1396,6 +1461,8 @@ def build_pdf(results):
                      reverse=True)
 
     dist = {"MALICIOUS": 0, "HIGH RISK": 0, "SUSPICIOUS": 0, "CLEAN": 0}
+    if kind == "hash":
+        dist.pop("HIGH RISK")
     for r in results:
         dist[r.get("verdict", "CLEAN")] = dist.get(r.get("verdict", "CLEAN"), 0) + 1
 
@@ -1405,7 +1472,7 @@ def build_pdf(results):
         [Paragraph(str(dist[k]), ps("sv{}".format(i), fontName="Helvetica-Bold", fontSize=22,
                                     textColor=vc(k), alignment=TA_CENTER)) for i, k in enumerate(dist)],
     ]
-    st = Table(sum_data, colWidths=[W/4]*4, rowHeights=[20, 40])
+    st = Table(sum_data, colWidths=[W/len(dist)]*len(dist), rowHeights=[20, 40])
     st.setStyle(TableStyle([
         ("BACKGROUND",    (0,0), (-1,-1), BG_CARD),
         ("TOPPADDING",    (0,0), (-1,-1), 6),
@@ -1421,18 +1488,23 @@ def build_pdf(results):
                             ps("ov", fontName="Helvetica-Bold", fontSize=10, textColor=COL_TEXT)))
     story.append(Spacer(1, 2*mm))
 
-    ov = [["IP Address", "Score  /  Bar", "Verdict", "Timestamp"]]
-    cw = [W*0.25, W*0.35, W*0.17, W*0.23]
+    ov = [["File Hash" if kind == "hash" else "IP Address", "Score  /  Bar", "Verdict", "Timestamp"]]
+    cw = [W*0.34, W*0.32, W*0.14, W*0.20] if kind == "hash" else [W*0.25, W*0.35, W*0.17, W*0.23]
     for r in results:
-        v = r.get("verdict", "CLEAN")
-        score_cell = Paragraph(score_bar_text(r["score"]),
-                               ps("sc_bar{}".format(r["ip"]), fontName="Helvetica", fontSize=8,
+        v   = r.get("verdict", "CLEAN")
+        rid = str(r.get(id_field, ""))
+        score_cell = Paragraph(score_bar_text(r.get("score", 0)),
+                               ps("sc_bar{}".format(rid), fontName="Helvetica", fontSize=8,
                                   textColor=vc(v), leading=13))
+        id_txt = pdf_esc(rid)
+        if kind == "hash":
+            id_txt = '<font size="6.5">{}</font><br/><font size="6" color="#8b949e">{}</font>'.format(
+                id_txt, pdf_esc(r.get("hash_type", "")))
         ov.append([
-            Paragraph(r["ip"], ps("ipc{}".format(r["ip"]), fontName="Helvetica-Bold", fontSize=8, textColor=COL_CYAN)),
+            Paragraph(id_txt, ps("ipc{}".format(rid), fontName="Helvetica-Bold", fontSize=8, textColor=COL_CYAN, leading=9)),
             score_cell,
-            verdict_badge(v, col_w=int(W*0.15)),
-            Paragraph(r.get("timestamp", ""), ps("tsc{}".format(r["ip"]), fontSize=7, textColor=COL_TEXT2)),
+            verdict_badge(v, col_w=int(W*0.13 if kind == "hash" else W*0.15)),
+            Paragraph(pdf_esc(r.get("timestamp", "")), ps("tsc{}".format(rid), fontSize=7, textColor=COL_TEXT2)),
         ])
     ov_t = Table(ov, colWidths=cw, repeatRows=1)
     ov_t.setStyle(TableStyle([
@@ -1454,12 +1526,16 @@ def build_pdf(results):
         story.append(Spacer(1, 7*mm))
         story.append(HRFlowable(width="100%", thickness=1, color=COL_BORDER))
         story.append(Spacer(1, 3*mm))
-        v = r.get("verdict", "CLEAN")
+        v   = r.get("verdict", "CLEAN")
+        rid = str(r.get(id_field, ""))
+        hdr_txt = pdf_esc(rid)
+        if kind == "hash":
+            hdr_txt = '<font size="8">{}</font>'.format(hdr_txt)
         ip_hdr = Table([[
-            Paragraph(r["ip"], ps("iph"+r["ip"][:6], fontName="Helvetica-Bold", fontSize=13, textColor=COL_CYAN)),
+            Paragraph(hdr_txt, ps("iph"+rid[:6], fontName="Helvetica-Bold", fontSize=13, textColor=COL_CYAN, leading=15)),
             verdict_badge(v, col_w=int(W*0.20)),
-            Paragraph("Score: {:.1f} / 100".format(r["score"]),
-                      ps("sch"+r["ip"][:6], fontName="Helvetica-Bold", fontSize=10,
+            Paragraph("Score: {:.1f} / 100".format(r.get("score", 0)),
+                      ps("sch"+rid[:6], fontName="Helvetica-Bold", fontSize=10,
                          textColor=vc(v), alignment=TA_RIGHT)),
         ]], colWidths=[W*0.45, W*0.23, W*0.32])
         ip_hdr.setStyle(TableStyle([
@@ -1474,30 +1550,49 @@ def build_pdf(results):
         ]))
         story.append(ip_hdr)
         story.append(Spacer(1, 2*mm))
-        story.append(score_bar_drawing(r["score"], width=int(W), height=14))
-        story.append(Spacer(1, 4*mm))
+        story.append(score_bar_drawing(r.get("score", 0), width=int(W), height=14))
+        story.append(Spacer(1, 2*mm))
+        if r.get("manual_override"):
+            story.append(Paragraph(
+                "Analyst override: verdict set manually to <b>{}</b> (system verdict: {})".format(
+                    pdf_esc(v), pdf_esc(r.get("system_verdict", ""))),
+                ps("man"+rid[:6], fontSize=7, textColor=colors.HexColor("#d29922"))))
+            story.append(Spacer(1, 1*mm))
+        if kind == "hash" and r.get("file_info"):
+            fi = r["file_info"]
+            story.append(Paragraph(
+                "File: {}  |  Type: {}  |  Size: {} bytes  |  Detections: {}/{}".format(
+                    pdf_esc(fi.get("name", "—")), pdf_esc(fi.get("type", "—")), pdf_esc(fi.get("size", "—")),
+                    pdf_esc(fi.get("detections", "—")), pdf_esc(fi.get("total_engines", "—"))),
+                ps("fi"+rid[:6], fontSize=7.5, textColor=COL_TEXT2)))
+            story.append(Spacer(1, 1*mm))
+        story.append(Spacer(1, 2*mm))
 
-        src_rows = [["Source", "Score", "Findings"]]
+        src_rows = [["Source", "Score", "Findings  /  Verification URL"]]
         for s in r.get("sources", []):
-            sc   = round(s.get("score", 0), 1)
+            sname = str(s.get("source", ""))
+            sc   = round(s.get("score", 0) or 0, 1)
             sign = "+{:.1f}".format(sc) if sc > 0 else "{:.1f}".format(sc)
-            scol = SRC_COL.get(s["source"], COL_CYAN)
-            ioc_text = "\n".join(s.get("ioc") or [])
+            scol = SRC_COL.get(sname, COL_CYAN)
+            lines = [pdf_esc(l) for l in (s.get("ioc") or [])]
             if s.get("error"):
-                ioc_text = ("WARNING: " + str(s["error"])) + ("\n" + ioc_text if ioc_text else "")
-            if not ioc_text:
-                ioc_text = "No data returned"
+                lines.insert(0, "WARNING: " + pdf_esc(s["error"]))
+            if not lines:
+                lines.append("No data returned")
+            url = s.get("url") or _lookup_url(sname, rid, kind)
+            if url:
+                lines.append('<font color="#8b949e">Verify:</font> ' + pdf_link(url))
             src_rows.append([
-                Paragraph(s["source"], ps("srn{}".format(s["source"]), fontName="Helvetica-Bold",
-                                          fontSize=8, textColor=scol)),
-                Paragraph(sign + " pts", ps("srs{}".format(s["source"]), fontName="Helvetica-Bold",
+                Paragraph(pdf_esc(sname), ps("srn{}".format(sname), fontName="Helvetica-Bold",
+                                             fontSize=8, textColor=scol)),
+                Paragraph(sign + " pts", ps("srs{}".format(sname), fontName="Helvetica-Bold",
                                              fontSize=9,
                                              textColor=colors.HexColor("#f85149") if sc > 0 else COL_TEXT2,
                                              alignment=TA_CENTER)),
-                Paragraph(ioc_text.replace("\n", "<br/>"),
-                           ps("sri{}".format(s["source"]), fontSize=7.5, textColor=COL_TEXT2, leading=11)),
+                Paragraph("<br/>".join(lines),
+                           ps("sri{}".format(sname), fontSize=7.5, textColor=COL_TEXT2, leading=11)),
             ])
-        src_t = Table(src_rows, colWidths=[W*0.26, W*0.14, W*0.60], repeatRows=1)
+        src_t = Table(src_rows, colWidths=[W*0.22, W*0.12, W*0.66], repeatRows=1)
         src_t.setStyle(TableStyle([
             ("BACKGROUND",    (0,0), (-1,0), BG_CARD),
             ("TEXTCOLOR",     (0,0), (-1,0), COL_TEXT2),
@@ -1519,9 +1614,10 @@ def build_pdf(results):
     story.append(HRFlowable(width="100%", thickness=0.5, color=COL_BORDER))
     story.append(Spacer(1, 2*mm))
     story.append(Paragraph(
-        "IP Reputation Investigator v2.0  |  "
-        "AbuseIPDB, VirusTotal, AlienVault OTX, Hybrid Analysis, GreyNoise, ip-api, ThreatFox  |  "
-        "For SOC / Threat Hunting use only.",
+        "NXG SOC Platform  |  " +
+        ("VirusTotal, MalwareBazaar, AlienVault OTX, Hybrid Analysis" if kind == "hash" else
+         "AbuseIPDB, VirusTotal, AlienVault OTX, Hybrid Analysis, GreyNoise, ip-api, ThreatFox") +
+        "  |  Source URLs are included per finding for independent verification  |  For SOC / Threat Hunting use only.",
         ps("ft", fontSize=6.5, textColor=COL_TEXT2, alignment=TA_CENTER)))
 
     def dark_bg(canvas, _doc):
@@ -1545,8 +1641,30 @@ def export_pdf():
     if not data or not data.get("results"):
         return jsonify({"error": "No results data provided"}), 400
     try:
-        buf      = build_pdf(data["results"])
+        buf      = build_pdf(data["results"], kind="ip")
         filename = "ip_report_{}.pdf".format(datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"))
+        response = make_response(buf.read())
+        response.headers["Content-Type"]        = "application/pdf"
+        response.headers["Content-Disposition"] = "attachment; filename={}".format(filename)
+        return response
+    except Exception as e:
+        import traceback
+        return jsonify({"error": "PDF generation failed: {}".format(str(e)),
+                        "detail": traceback.format_exc()}), 500
+
+
+@app.route("/api/export/hash/pdf", methods=["POST"])
+def export_hash_pdf():
+    try:
+        import reportlab  # noqa
+    except ImportError:
+        return jsonify({"error": "reportlab not installed. Run: pip install reportlab"}), 500
+    data = request.get_json()
+    if not data or not data.get("results"):
+        return jsonify({"error": "No results data provided"}), 400
+    try:
+        buf      = build_pdf(data["results"], kind="hash")
+        filename = "hash_report_{}.pdf".format(datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"))
         response = make_response(buf.read())
         response.headers["Content-Type"]        = "application/pdf"
         response.headers["Content-Disposition"] = "attachment; filename={}".format(filename)
@@ -2762,25 +2880,29 @@ def build_traffic_pdf(payload):
             story.append(score_bar_drawing(score, width=int(W), height=10))
             story.append(Spacer(1, 2*mm))
 
-            src_rows = [["Source", "Score", "Findings"]]
+            src_rows = [["Source", "Score", "Findings  /  Verification URL"]]
             for s in srcs:
-                sc   = round(s.get("score", 0), 1)
-                sign = "+{:.1f}".format(sc) if sc > 0 else "0.0"
+                sc   = round(s.get("score", 0) or 0, 1)
+                sign = "+{:.1f}".format(sc) if sc > 0 else "{:.1f}".format(sc)
                 scol = SRC_COL.get(s.get("source",""), COL_CYAN)
-                ioc_text = "\n".join(s.get("ioc") or [])
+                lines = [pdf_esc(l) for l in (s.get("ioc") or [])]
                 if s.get("error"):
-                    ioc_text = ("ERR: " + str(s["error"])) + ("\n" + ioc_text if ioc_text else "")
-                if not ioc_text:
-                    ioc_text = "No data returned"
+                    lines.insert(0, "ERR: " + pdf_esc(s["error"]))
+                if not lines:
+                    lines.append("No data returned")
+                _url = s.get("url") or _lookup_url(s.get("source",""), ip, "ip")
+                if _url:
+                    lines.append('<font color="#8b949e">Verify:</font> ' + pdf_link(_url))
+                ioc_text = "<br/>".join(lines)
                 src_rows.append([
-                    Paragraph(s.get("source",""), ps("srn"+s.get("source","")[:4]+ip[:4],
+                    Paragraph(pdf_esc(s.get("source","")), ps("srn"+s.get("source","")[:4]+ip[:4],
                                                      fontName="Helvetica-Bold", fontSize=8,
                                                      textColor=scol)),
                     Paragraph(sign + " pts", ps("srs"+ip[:4]+s.get("source","")[:3],
                                                 fontName="Helvetica-Bold", fontSize=9,
                                                 textColor=COL_RED if sc > 0 else COL_TEXT2,
                                                 alignment=TA_CENTER)),
-                    Paragraph(ioc_text.replace("\n", "<br/>"),
+                    Paragraph(ioc_text,
                                ps("sri"+ip[:4]+s.get("source","")[:3], fontSize=7.5,
                                   textColor=COL_TEXT2, leading=11)),
                 ])
@@ -3219,4 +3341,11 @@ def api_analyze_pcap():
 
 
 if __name__ == "__main__":  # entrypoint
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    # Debug (Werkzeug interactive debugger = remote code execution if reachable)
+    # is OFF unless NXG_DEBUG=1. Bind to loopback unless NXG_HOST is set —
+    # this app has no authentication; put a reverse proxy with TLS + auth in
+    # front before exposing it beyond the local machine.
+    _debug = os.environ.get("NXG_DEBUG", "0").lower() in ("1", "true", "yes")
+    _host  = os.environ.get("NXG_HOST", "127.0.0.1")
+    _port  = int(os.environ.get("NXG_PORT", "5000"))
+    app.run(debug=_debug, host=_host, port=_port)
